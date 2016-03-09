@@ -1,4 +1,10 @@
 # Byte-compiled / optimized / DLL files
+CMake*
+cmake_install.cmake
+Makefile
+UGRID*.C
+UGRID*.h
+*~
 __pycache__/
 *.py[cod]
 *$py.class
