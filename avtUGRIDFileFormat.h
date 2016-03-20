@@ -47,7 +47,29 @@
 #include <vtkUnstructuredGrid.h>
 
 #include <vector>
+#include <map>
 
+
+class VarInfo {
+public:
+  std::string name;
+  std::string mesh_name;
+
+  // these are -1 if not present, and otherwise
+  // give where the respective dimension falls in the variable definition.
+  int time_dimi,cell_dimi,layer_dimi,node_dimi;
+  // really these ought to be stored in a mesh object - shared among variables
+  // which live on the same grid.
+  int time_dim,cell_dim,layer_dim,node_dim;
+  int var_id,ncid;
+
+  VarInfo(std::string);
+  VarInfo(void);
+  VarInfo(const VarInfo &);
+  
+  float *read_cell_at_time(int);
+  float *read_cell_z_at_time(int);
+};
 
 // ****************************************************************************
 //  Class: avtUGRIDFileFormat
@@ -63,8 +85,9 @@
 class avtUGRIDFileFormat : public avtMTSDFileFormat
 {
   public:
-                       avtUGRIDFileFormat(const char *);
-  virtual           ~avtUGRIDFileFormat();
+  avtUGRIDFileFormat(const char *);
+
+  virtual ~avtUGRIDFileFormat();
 
     //
     // This is used to return unconvention data -- ranging from material
@@ -93,6 +116,8 @@ class avtUGRIDFileFormat : public avtMTSDFileFormat
     virtual vtkDataArray  *GetVectorVar(int, const char *);
 
   vtkUnstructuredGrid *GetMeshNodes(const std::string);
+  vtkDataSet *ExtrudeTo3D(const std::string,int,vtkUnstructuredGrid *);
+  vtkPoints *GetNodes(const std::string);
 
 protected:
   // DATA MEMBERS
@@ -100,9 +125,38 @@ protected:
   virtual void           PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
 
   int ncid; // handle for netcdf file
-  int time_dim;
+  int time_dim,node_dim,cell_dim,layer_dim;
   int time_var, mesh_var;
-  
+  int node_x_var,node_y_var;
+  std::string default_ugrid_mesh;
+  std::map<std::string,VarInfo> var_table;
+
+
+  // basic dimensions 
+  size_t n_nodes,n_cells,n_layers;
+
+  // map 3D cell ids to real cells, because cells that are
+  // underground are not output.
+  std::map<int,int> full_cell2valid;
+
+
+  // netcdf helpers:
+  // read a full field of values at a given timestate
+  // layer is the fastest changing index
+  float *read_cell_z_full(std::string,int);
+
+  std::string var_mesh(std::string);
+  std::string var_mesh(int);
+
+  void activateTimestate(int);
+  // various geometry-related data specific to the active timestate
+  int active_timestate;
+  int *cell_kmin;
+  int *cell_kmax;
+  int ncells_3d;
+
+  vtkDataArray *GetVar3D(int, VarInfo &);
+  vtkDataArray *GetVar2D(int, VarInfo &);
 };
 
 

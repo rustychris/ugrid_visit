@@ -66,6 +66,38 @@
 using     std::string;
 
 
+VarInfo::VarInfo(std::string n) 
+  : name(n) 
+{
+  VarInfo();
+}
+
+VarInfo::VarInfo(void)
+{
+  time_dimi=cell_dimi=layer_dimi=node_dimi=-1;
+  var_id=-1;
+  ncid=-1;
+}
+
+VarInfo::VarInfo(const VarInfo &a)
+{
+  // this really shouldn't be necessary, but it's acting up...
+  name=a.name;
+  mesh_name=a.mesh_name;
+  time_dimi=a.time_dimi;
+  cell_dimi=a.cell_dimi;
+  layer_dimi=a.layer_dimi;
+  node_dimi=a.node_dimi;
+  time_dim=a.time_dim;
+  cell_dim=a.cell_dim;
+  layer_dim=a.layer_dim;
+  node_dim=a.node_dim;
+  var_id=a.var_id;
+  debug1 << "Copied a varinfo with var_id " << var_id << endl;
+  ncid=a.ncid;
+}
+
+
 // ****************************************************************************
 //  Method: avtUGRIDFileFormat constructor
 //
@@ -80,32 +112,136 @@ avtUGRIDFileFormat::avtUGRIDFileFormat(const char *filename)
   // INITIALIZE DATA MEMBERS
   int retval;
   
-  if ((retval = nc_open(filename, NC_NOWRITE, &ncid))) {
+  if ( nc_open(filename, NC_NOWRITE, &ncid) ) {
     debug1 << "Failed to open " << filename << endl;
     return;
   } 
   debug1 << "UGRID: opened " << filename << endl;
 
-  if (( retval= nc_inq_dimid(ncid,"time", &time_dim ) ) ) {
+  if ( nc_inq_dimid(ncid,"time", &time_dim) ) {
     debug1 << "Failed to read time dimensions" << endl;
   }
 
-  if ((retval = nc_inq_varid(ncid, "time", &time_var))) {
+  if ( nc_inq_varid(ncid, "time", &time_var) ) {
     debug1 << "Couldn't read time variable id" << endl;
     return;
   }
+
+  cell_kmin=cell_kmax=NULL;
+  active_timestate=-1;
 
   // FIX: should be figured out based on cf_role
   if ((retval = nc_inq_varid(ncid, "FlowMesh", &mesh_var))) {
     debug1 << "Couldn't read mesh variable id FlowMesh" << endl;
     return;
   }
+
+  debug1 << "UGRID:: Found a mesh variable..." << endl;
+
+  // Basic dimensions:
+  // for the moment, depends on the presence of a volume variable, which
+  // is assumed to have time,cell,layer dimensions
+  int vol_var;
+  if( nc_inq_varid(ncid,"volume",&vol_var) ) {
+    debug1 << "Failed to read volume variable to figure out dimensions" << endl;
+    return;
+  }
+  int vol_dimids[3];
+  if ( nc_inq_vardimid(ncid,vol_var,vol_dimids) ) {
+    debug1 << "Failed to read volume dimensions ids" << endl;
+    return;
+  }
+  cell_dim=vol_dimids[1];
+  layer_dim=vol_dimids[2];
+  if (  nc_inq_dimlen(ncid,cell_dim,&n_cells)  ||
+        nc_inq_dimlen(ncid,layer_dim,&n_layers) ) {
+    debug1 << "Failed to read dimensions of volume variable" << endl;
+    return;
+  }
+
+  // this is working, so the var id for volume is good..
+  debug1 << "UGRID: got a volume variable... " << endl;
+  debug1 << "Read n_layers=" << n_layers << " and n_cells="<< n_cells << endl;
+ 
+  // Load node metadata - not sure why nc_get_att_string doesn't work..
+  default_ugrid_mesh=var_mesh("volume");
+
+  string ugrid_mesh=default_ugrid_mesh;
+  debug1 << "Deduced mesh name: " << ugrid_mesh << endl;
+
+  debug1 << "UGRID:GetNodes: ugrid mesh name " << ugrid_mesh << endl;
+
+  if ( nc_inq_varid(ncid,ugrid_mesh.c_str(),&mesh_var) ) {
+    debug1 << "UGRID:GetMeshNodes: Failed to find mesh variable" << endl;
+    return;
+  }
+
+  debug1 << "UGRID: poking around for node coordinates " << endl;
+
+  char *att_data;
+  if ( nc_get_att_string(ncid, mesh_var, "node_coordinates",&att_data) ) {
+    debug1 << "Failed to read from node coordinates" << endl;
+    return;
+  }
+
+  string node_coords(att_data);
+  // netcdf says we have to do this, but it's causing problems...
+  //nc_free_string(strlen(att_data),&att_data);
+
+  debug1 << "Node coordinate values " << node_coords << endl;
+
+  string node_x=node_coords.substr(0,node_coords.find_first_of(" "));
+  debug1 << "node x variable '" << node_x << "'" << endl;
+  string node_y=node_coords.substr(node_coords.find_last_of(" ")+1,
+                                   node_coords.length());
+  debug1 << "node y variable '" << node_y << "'" << endl;
+
+  if( nc_inq_varid(ncid,node_x.c_str(),&node_x_var) ) {
+    debug1 << "Failed to find node_x variable" << endl;
+    return;
+  }
+  if( nc_inq_varid(ncid,node_y.c_str(),&node_y_var) ) {
+    debug1 << "Failed to find node_y variable" << endl;
+    return;
+  }
+
+  // _assume_ that they have exactly one dimension.
+  nc_inq_vardimid(ncid,node_x_var,&node_dim);
+
+  nc_inq_dimlen(ncid,node_dim,&n_nodes);
+  
+  debug1 << "Found " << n_nodes << " nodes" << endl;
+
 }
 
 avtUGRIDFileFormat::~avtUGRIDFileFormat() {
-  ;
+  delete[] cell_kmin;
+  delete[] cell_kmax;
 }
 
+string avtUGRIDFileFormat::var_mesh(std::string varname) {
+  int varid;
+  nc_inq_varid(ncid,varname.c_str(),&varid);
+  return var_mesh(varid);
+}
+
+string avtUGRIDFileFormat::var_mesh(int varid) {
+  size_t mesh_name_len;
+  if ( nc_inq_attlen(ncid,varid,"mesh",&mesh_name_len) ) {
+    // debug1 << "Failed to get length of mesh attribute" << endl;
+    return "";
+  }
+  char *mesh_name=new char[mesh_name_len+1];
+  // wasn't working with nc_get_att_string...
+  if( nc_get_att_text(ncid,varid,"mesh",mesh_name) ) {
+    debug1 << "Failed to find mesh attribute on variable" << endl;
+    return "";
+  }
+  mesh_name[mesh_name_len]='\0';
+  string result(mesh_name);
+  delete[] mesh_name;
+  return result;
+}
 
 // ****************************************************************************
 //  Method: avtEMSTDFileFormat::GetNTimesteps
@@ -165,22 +301,32 @@ avtUGRIDFileFormat::FreeUpResources(void)
 void
 avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
 {
-  string ugrid_mesh="FlowMesh"; // FIX should be based on cf_role
+  string ugrid_mesh=default_ugrid_mesh;
 
   string meshname = ugrid_mesh+".2d";
   // AVT_RECTILINEAR_MESH, AVT_CURVILINEAR_MESH, AVT_UNSTRUCTURED_MESH,
   // AVT_POINT_MESH, AVT_SURFACE_MESH, AVT_UNKNOWN_MESH
-  avtMeshType mt = AVT_POINT_MESH;
+  avtMeshType mt = AVT_UNSTRUCTURED_MESH;
 
   int nblocks = 1;  // <-- this must be 1 for MTSD
   int block_origin = 0;
   int spatial_dimension = 2;
-  int topological_dimension = 0;
+  int topological_dimension = 2;
   double *extents = NULL;
 
   AddMeshToMetaData(md, meshname, mt, extents, nblocks, block_origin,
                     spatial_dimension, topological_dimension);
-   
+
+  AddMeshToMetaData(md, 
+                    ugrid_mesh+".3d", // mesh name
+                    AVT_UNSTRUCTURED_MESH, // mesh type
+                    NULL, // extents
+                    1,    // nblocks
+                    0,    // block origin
+                    3,   // spatial dimension
+                    3   // topological dimension
+                    );
+
   string mesh_for_this_var = ugrid_mesh+".2d"; 
   string varname = "bathymetry";
   //
@@ -188,9 +334,96 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
   avtCentering cent = AVT_NODECENT;
   AddScalarVarToMetaData(md, varname, mesh_for_this_var, cent);
 
-
   AddMeshToMetaData(md,ugrid_mesh+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
 
+  // Loop through variables in file, trying to match them to grids
+  // and register with metadata
+  int nvars;
+  if ( nc_inq_nvars(ncid,&nvars) ) {
+    debug1 << "Failed. How could nc_inq_nvars fail??" << endl;
+    return;
+  }
+
+  debug1 << "UGRID: Scanning variable definitions" << endl;
+
+  char var_scan[NC_MAX_NAME];
+  
+  for(int var_num=0;var_num<nvars;var_num++) {
+    if ( nc_inq_varname(ncid,var_num,var_scan) ) {
+      debug1 << "Failed to read name of variable at index " << var_num << endl;
+    } else {
+      debug1 << "Variable: "<<var_scan << " [" << var_num << "]" <<endl;
+
+      // read dimensions - if it has either cell/node and a layer dimension, assign to
+      // 3D mesh.
+      // if just cell/node, put it on the 2d mesh.
+      int dims[6]; // who would have more than 6 dimensions??
+      int ndim;
+
+      if( nc_inq_varndims(ncid,var_num,&ndim) || 
+          nc_inq_vardimid(ncid,var_num,dims) ) {
+        debug1 << "Failed.  How did that happen?" << endl;
+        continue;
+      }
+      int extra_dims=0;
+
+      VarInfo var_inf(var_scan);
+      var_inf.var_id=var_num;
+      var_inf.time_dim=time_dim;
+      // these will shortly be moved to a shared mesh object
+      var_inf.layer_dim=layer_dim;
+      var_inf.cell_dim=cell_dim;
+      var_inf.node_dim=node_dim;
+      var_inf.ncid=ncid;
+      for( int d=0;d<ndim;d++) {
+        if ( dims[d] == cell_dim )
+          var_inf.cell_dimi=d;
+        else if (dims[d] == layer_dim )
+          var_inf.layer_dimi=d;
+        else if (dims[d] == time_dim ) 
+          var_inf.time_dimi=d;
+        else if (dims[d] == node_dim )
+          var_inf.node_dimi=d;
+        else
+          extra_dims++;
+      }
+      var_inf.mesh_name=var_mesh(var_scan);
+      if ( var_inf.mesh_name != ugrid_mesh ) {
+        if ( var_inf.mesh_name != "" ) 
+          debug1 << "Found another ugrid mesh.  Not ready for that." << endl;
+        continue;
+      }
+
+      if ( extra_dims>0 ) {
+        debug1 << "Variable " << var_scan << " has extra dimensions.  Not ready..." << endl;
+        continue;
+      }
+      
+      if ( var_inf.layer_dimi>=0 ) {
+        if ( var_inf.cell_dimi>=0 ) {
+          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_ZONECENT);
+        } else if( var_inf.node_dimi>=0 ) {
+          // probably don't have any of these
+          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_NODECENT);
+        } else {
+          debug1 << "Will ignore " << var_scan << " b/c it doesn't have a horizontal dimension"
+                 << endl;
+        }
+      } else { 
+        // no layer
+        if ( var_inf.cell_dimi>=0 ) {
+          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".2d", AVT_ZONECENT);
+        } else if ( var_inf.node_dimi>=0 ) {
+          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".2d", AVT_NODECENT);
+        } else {
+          debug1 << "Will ignore " << var_scan << " b/c it doesn't have a horizontal dimension"
+                 << endl;
+        }
+      }
+      var_table[var_scan] = var_inf;
+    }
+  }
+  
     //
     // CODE TO ADD A VECTOR VARIABLE
     //
@@ -205,56 +438,6 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
     // Here's the call that tells the meta-data object that we have a var:
     //
     // AddVectorVarToMetaData(md, varname, mesh_for_this_var, cent,vector_dim);
-    //
-
-    //
-    // CODE TO ADD A TENSOR VARIABLE
-    //
-    // string mesh_for_this_var = meshname; // ??? -- could be multiple meshes
-    // string varname = ...
-    // int tensor_dim = 9;
-    //
-    // AVT_NODECENT, AVT_ZONECENT, AVT_UNKNOWN_CENT
-    // avtCentering cent = AVT_NODECENT;
-    //
-    //
-    // Here's the call that tells the meta-data object that we have a var:
-    //
-    // AddTensorVarToMetaData(md, varname, mesh_for_this_var, cent,tensor_dim);
-    //
-
-    //
-    // CODE TO ADD A MATERIAL
-    //
-    // string mesh_for_mat = meshname; // ??? -- could be multiple meshes
-    // string matname = ...
-    // int nmats = ...;
-    // vector<string> mnames;
-    // for (int i = 0 ; i < nmats ; i++)
-    // {
-    //     char str[32];
-    //     sprintf(str, "mat%d", i);
-    //     -- or -- 
-    //     strcpy(str, "Aluminum");
-    //     mnames.push_back(str);
-    // }
-    // 
-    // Here's the call that tells the meta-data object that we have a mat:
-    //
-    // AddMaterialToMetaData(md, matname, mesh_for_mat, nmats, mnames);
-    //
-    //
-    // Here's the way to add expressions:
-    //Expression momentum_expr;
-    //momentum_expr.SetName("momentum");
-    //momentum_expr.SetDefinition("{u, v}");
-    //momentum_expr.SetType(Expression::VectorMeshVar);
-    //md->AddExpression(&momentum_expr);
-    //Expression KineticEnergy_expr;
-    //KineticEnergy_expr.SetName("KineticEnergy");
-    //KineticEnergy_expr.SetDefinition("0.5*(momentum*momentum)/(rho*rho)");
-    //KineticEnergy_expr.SetType(Expression::ScalarMeshVar);
-    //md->AddExpression(&KineticEnergy_expr);
     //
 }
 
@@ -279,52 +462,8 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
 // ****************************************************************************
 
 
-vtkUnstructuredGrid *avtUGRIDFileFormat::GetMeshNodes(const string ugrid_mesh) 
+vtkPoints *avtUGRIDFileFormat::GetNodes(const string ugrid_mesh) 
 {
-  debug1 << "ugrid mesh name " << ugrid_mesh << endl;
-
-  int mesh_var;
-  if ( nc_inq_varid(ncid,ugrid_mesh.c_str(),&mesh_var) ) {
-    debug1 << "Failed to find mesh variable" << endl;
-    return NULL;
-  }
-
-  char *att_data;
-  if ( nc_get_att_string(ncid, mesh_var, "node_coordinates",&att_data) ) {
-    debug1 << "Failed to read from node coordinates" << endl;
-    return NULL;
-  }
-
-  string node_coords(att_data);
-  // netcdf says we have to do this, but it's causing problems...
-  //nc_free_string(strlen(att_data),&att_data);
-
-  debug1 << "Node coordinate values " << node_coords << endl;
-
-  string node_x=node_coords.substr(0,node_coords.find_first_of(" "));
-  debug1 << "node x variable '" << node_x << "'" << endl;
-  string node_y=node_coords.substr(node_coords.find_last_of(" ")+1,
-                                   node_coords.length());
-  debug1 << "node y variable '" << node_y << "'" << endl;
-
-  int node_x_var,node_y_var;
-  if( nc_inq_varid(ncid,node_x.c_str(),&node_x_var) ) {
-    debug1 << "Failed to find node_x variable" << endl;
-    return NULL;
-  }
-  if( nc_inq_varid(ncid,node_y.c_str(),&node_y_var) ) {
-    debug1 << "Failed to find node_y variable" << endl;
-    return NULL;
-  }
-
-  // _assume_ that they have exactly one dimension.
-  int node_dim;
-  nc_inq_vardimid(ncid,node_x_var,&node_dim);
-  size_t n_nodes;
-  nc_inq_dimlen(ncid,node_dim,&n_nodes);
-  
-  debug1 << "Found " << n_nodes << " nodes" << endl;
-
   float *xcoords=new float[n_nodes];
   float *ycoords=new float[n_nodes];
 
@@ -354,6 +493,15 @@ vtkUnstructuredGrid *avtUGRIDFileFormat::GetMeshNodes(const string ugrid_mesh)
   delete[] xcoords;
   delete[] ycoords;
 
+  return points;
+}
+
+vtkUnstructuredGrid *avtUGRIDFileFormat::GetMeshNodes(const string ugrid_mesh) 
+{
+  vtkPoints *points=GetNodes(ugrid_mesh);
+
+  int n_nodes=points->GetNumberOfPoints();
+
   vtkIdType onevertex;
 
   vtkUnstructuredGrid *ugrid = vtkUnstructuredGrid::New();
@@ -376,39 +524,39 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
   int ndim;
   int retval;
 
-  if ( requested.find(".nodes",requested.length()-6)>0) {
+  if ( requested.find(".nodes") != string::npos) {
     ugrid_mesh = requested.substr(0,requested.length()-6);
+    debug1 << "UGRID:GetMesh: requested '"<< requested << "' - will hand to GetMeshNodes" << endl;
     return GetMeshNodes(ugrid_mesh);
   } 
 
-  if(  requested.find(".2d",requested.length()-3)>0 ) {
+  if(  requested.find(".2d",requested.length()-3) != string::npos ) {
     ugrid_mesh = requested.substr(0,requested.length()-3);
-    ndim=2;
     debug1 << "Found 2d mesh name" << endl;
-  } else if ( requested.find(".3d",requested.length()-3)>0 ) {
+    ndim=2;
+  } else if ( requested.find(".3d",requested.length()-3) != string::npos ) {
     ugrid_mesh = requested.substr(0,requested.length()-3);
+    debug1 << "Found 3d mesh name" << endl;
     ndim=3;
   } else {
+    debug1 << "In mesh name '"<<meshname<<"' couldn't decipher ugrid mesh" << endl;
     return NULL;
   }
 
   // the others are built on top of the node mesh
-  vtkUnstructuredGrid *node_mesh = GetMeshNodes(ugrid_mesh);
-  vtkPoints *points = node_mesh->GetPoints();
+  vtkPoints *points = GetNodes(ugrid_mesh);
   
   vtkUnstructuredGrid *mesh=vtkUnstructuredGrid::New();
   mesh->SetPoints(points);
-  // points->Delete() ; // unsure of the memory management...
-
-  if ( ndim == 3 ) 
-    return NULL; // not ready.
+  points->Delete() ; // pretty sure this is correct...
+  mesh->Allocate();
 
   // read the node_face info, build up triangles/quads.
-  debug1 << "ugrid mesh name " << ugrid_mesh << endl;
+  debug1 << "GetMesh: ugrid mesh name " << ugrid_mesh << endl;
 
   int mesh_var;
   if ( nc_inq_varid(ncid,ugrid_mesh.c_str(),&mesh_var) ) {
-    debug1 << "Failed to find mesh variable" << endl;
+    debug1 << "UGRID:GetMesh: Failed to find mesh variable" << ugrid_mesh << endl;
     return NULL;
   }
 
@@ -435,36 +583,393 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
 
   int f_n_dims[2]; // _assume_ face_node_connectivity has two dimensions, [Nfaces,MaxNodePerFace]
   nc_inq_vardimid(ncid,face_node_var,f_n_dims);
-  size_t n_faces;
-  nc_inq_dimlen(ncid,f_n_dims[0],&n_faces);
+  
+  int face_node_fill=-1; // default to -1...
+
+  if ( nc_get_att_int(ncid,face_node_var,"_FillValue", &face_node_fill) ) {
+    debug1 << "Failed to find fill value for face_node_connectivity - will assume " 
+           << face_node_fill << endl;
+  }
+
   size_t max_node_per_face;
   nc_inq_dimlen(ncid,f_n_dims[1],&max_node_per_face);
   
-  debug1 << "Found n_faces=" << n_faces << endl;
-
-  int *faces=new int[n_faces*max_node_per_face];
+  int *faces=new int[n_cells*max_node_per_face];
 
   if ( nc_get_var_int(ncid, face_node_var, faces) ) {
     debug1 << "Failed to read face_node_var" << endl;
     return NULL;
   }
-  
+
+  debug1 << "UGRID: max node per face: " << max_node_per_face << endl;
+
+  // Load as 2D, then optionally extrude to 3D
   vtkIdType *vertices=new vtkIdType[max_node_per_face];
-
-  mesh->Allocate();
-
-  // for(int f=0;f<n_faces;f++) {
-  //   for(int n=0;n<max_node_per_face;n++) {
-  // 
-  //     vertices
-  //   onevertex = n;
-  //   ugrid->InsertNextCell(VTK_VERTEX,1,&onevertex);
-  // }
-
+    
+  for(int f=0;f<n_cells;f++) {
+    int n;
+    for(n=0;n<max_node_per_face;n++) {
+      if (faces[f*max_node_per_face+n] == face_node_fill ) 
+        break;
+      // last dimension varies fastest
+      vertices[n] = faces[f*max_node_per_face + n]; // have to see if this is the right order
+    }
+    // This is failing - it's saying ERROR: bad cell type??
+    switch ( n ) {
+    case 3:
+      if ( f==0 ) {
+        debug1 << "UGRID:GetMesh: inserting triangle cell, vertices=" 
+               << vertices[0] << " " << vertices[1] << " " << vertices[2] << endl;
+      }
+      mesh->InsertNextCell(VTK_TRIANGLE,n,vertices);
+      break;
+    case 4: 
+      mesh->InsertNextCell(VTK_QUAD,n,vertices);
+      debug1 << "UGRID: Trying to insert VTK_QUAD" << endl;
+      break;
+    default:
+      debug1 << "UGRID: Trying to insert VTK_POLYGON" << endl;
+      mesh->InsertNextCell(VTK_POLYGON,n,vertices);
+    }
+  }
   delete[] vertices;
-  return mesh;
+  delete[] faces;
+  
+  if ( ndim==3 ) {
+    return ExtrudeTo3D(ugrid_mesh,timestate,mesh);
+  } else {
+    return mesh;
+  }
 }
 
+vtkDataSet *
+avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
+                                vtkUnstructuredGrid *surface)
+{
+  ////// Now basically extrude the surface mesh to prisms
+  // bounded by the cell_divisions elevations 
+
+  activateTimestate(timestate);
+
+  // the new points 
+  // copy the z=0 points from the flat surface, and then repeat
+  // for each z-value 
+  int n_surf_points = surface->GetNumberOfPoints();
+  
+  // for z-grid:
+  //   have a vertical dimension - in the current file, nFlowMesh_layers
+  //   hopefully that has a bounds attribute, which points to a variable
+  //   with dimensions nFlowMesh_layers,2, giving top and bottom elevation
+  //   of the z-layers.
+  
+  // max number of points in each column:
+  size_t num_layers;
+  int layer_var;
+  
+  if ( nc_inq_varid(ncid,"nFlowMesh_layers",&layer_var) ){
+    debug1 << "Failed to find layer variable" << endl;
+    return NULL;
+  }
+
+  int layer_dims[3]; // just to be safe..
+  if( nc_inq_vardimid(ncid,layer_var,layer_dims) ) {
+    debug1 << "failed to find layer dimension" << endl;
+    return NULL;
+  }
+
+  // and the bounds variable?
+  char *bounds_name;
+  int bounds_var;
+  if ( nc_get_att_string(ncid, layer_var, "bounds",&bounds_name) ) {
+    debug1 << "Failed to find bouns attribute" << endl;
+    return NULL;
+  }
+  if( nc_inq_varid(ncid,bounds_name,&bounds_var) ) {
+    debug1 << "Failed to find bounds variable" << endl;
+    return NULL;
+  }
+
+  debug1 << "Found bounds variable" << endl;
+
+  // for starters, assume that we have a bounds variable
+
+  int n_per_column=1+n_layers;
+
+  // for z-layers, one set of z coordinates for the whole grid.
+  // (ignoring partial layers for a moment)
+  float *layer_bounds=new float[2*n_per_column];
+  if ( nc_get_var_float(ncid,bounds_var,layer_bounds) ) {
+    debug1 << "Failed to read layer bounds" << endl;
+    return NULL;
+  }
+
+  vtkPoints *all_points = vtkPoints::New();
+  all_points->SetNumberOfPoints( n_per_column*n_surf_points );
+  float *ap_data = (float*)all_points->GetVoidPointer(0);
+  double *surf_point;
+  float *a_point;
+  
+  for(int surf_point_id=0;surf_point_id<n_surf_points;surf_point_id++) {
+    surf_point = surface->GetPoint(surf_point_id);
+    for(int k=0;k<n_per_column;k++){
+      // pointer to the point being defined
+      a_point = ap_data + 3*(surf_point_id+k*n_surf_points);
+      
+      a_point[0] = surf_point[0];
+      a_point[1] = surf_point[1];
+      // assumes that bounds are continuous - bottom of one cell same
+      // as top of the next
+      if(k==0) {
+        a_point[2] = layer_bounds[0];
+      } else {
+        a_point[2] = layer_bounds[2*(k-1)+1];
+      }
+    }
+  }
+  
+  vtkUnstructuredGrid *full_mesh = vtkUnstructuredGrid::New();
+   
+  // Copy the cell structure, extruding through depth
+  vtkIdType surf_cell_npoints;
+  vtkIdType *surf_cell_point_ids;
+  
+  // 2*6: top and bottom points, up to a hexagonal prism
+  vtkIdType new_cell_point_ids[2*6];
+  
+  // full_cell2valid provides a mapping of expected cell index to
+  //  actual cell index;
+  
+  // settings['stairstep']=0 ->  The bottom of the bottom valid cell is defined
+  //   by the voronoi center depth
+  //                      =1 ->  Round to next z-level (deeper)
+  // It's going to be a real pain to do partial depths, because it
+  //  upsets the mapping of points to different depths (bottom points
+  //   can't be reused, and the numbering gets all funky)
+  
+  // HERE
+  // Fetch the depth values in order to evaluate the bottom cells
+  // this is a little different for the ugrid stuff.
+  //  probably have node-centered depth
+  //  what's the CF convention say about this?
+  //  could create the full mesh?
+  //  probably it is supposed to be a [time,cell,layer] variable
+  //  in the netcdf.
+  //  there's the further consideration that really we want bounds, too,
+  //  so it would be [time,cell,layer,d2]
+  // regardless, this needs to be time-dependent.
+  
+  // the most immediate question is how to figure out how many 
+  // cells are in each water column.
+  
+  // vtkFloatArray *cell_depths =(vtkFloatArray *)GetVarBathymetry();
+  // float *bath_data = cell_depths->GetPointer(0);
+  
+  full_mesh->Allocate();
+   
+  int expected_cell_id=0;
+  int real_cell_id=0;
+     
+  for(int surf_cell_id=0 ;
+      surf_cell_id<n_cells ;
+      surf_cell_id++ ) {
+    // need to acount for different number of sides
+    int npoints=0;
+    
+    surface->GetCellPoints(surf_cell_id,
+                           surf_cell_npoints,surf_cell_point_ids);
+   
+    int k; // index into vertical cells
+    
+    for(k=cell_kmin[surf_cell_id];
+        k<cell_kmax[surf_cell_id];
+        k++) {
+      /// The Visit manual shows this as 0-1-2 being one triangular
+      // face with outward-facing normal, and 3-4-5 being the other
+      // end with inward-facing normal (where the normal is defined
+      // as outward on CCW ordered vertices)
+      // if this really angers Visit, may have to test ordering here
+      // and reverse top/bottom if vertices are in wrong order.
+      
+      // at some point we might add new bottom points to allow
+      // for partial cell depths, but for now just do stair-stepping
+      
+      // the upper level:
+      for (int vertex=0;vertex<surf_cell_npoints;vertex++) {
+        new_cell_point_ids[vertex] = k*n_surf_points + surf_cell_point_ids[vertex];
+      }
+        
+      // STAIRSTEPPING:
+      // the lower level:
+      for (int vertex=0;vertex<surf_cell_npoints;vertex++) {
+        new_cell_point_ids[surf_cell_npoints+vertex] = (k+1)*n_surf_points + 
+          surf_cell_point_ids[vertex];
+      }
+        
+      // Insert the cell into the mesh.
+      if ( surf_cell_npoints==3 ) {
+        full_mesh->InsertNextCell(VTK_WEDGE, 6, new_cell_point_ids);
+      } else if (surf_cell_npoints==4 ) {
+        full_mesh->InsertNextCell(VTK_HEXAHEDRON, 8, new_cell_point_ids);
+      } else if (surf_cell_npoints==5 ) {
+        full_mesh->InsertNextCell(VTK_PENTAGONAL_PRISM, 10, new_cell_point_ids);
+      } else if (surf_cell_npoints==6 ) {
+        full_mesh->InsertNextCell(VTK_HEXAGONAL_PRISM, 12, new_cell_point_ids);
+      } else {
+        debug1 << "Surface cell has " << surf_cell_npoints << " points, which is simply too many" << endl;
+        full_mesh->InsertNextCell(VTK_HEXAGONAL_PRISM, 12, new_cell_point_ids);
+      }
+      
+      // update the mapping of cell ids:
+      // the order of the data file is still a bit unclear, so hopefully
+      // this is the same as in the data file...
+      int expected_id = surf_cell_id + k*n_cells;
+   
+      full_cell2valid[ expected_id ] = real_cell_id;
+        
+      real_cell_id++;
+    }
+  }
+    
+  // hopefully it's okay to set the points here, *after* defining the cells
+  full_mesh->SetPoints(all_points);
+  all_points->Delete();
+  surface->Delete();
+   
+  // n_3d_cells = full_mesh->GetNumberOfCells();
+
+  full_mesh->Register(NULL);
+  return full_mesh;
+}
+
+
+void avtUGRIDFileFormat::activateTimestate(int timestate) {
+  if (timestate == active_timestate )
+    return;
+
+  ncells_3d=0;
+
+  if(!cell_kmin) {
+    cell_kmin = new int[n_cells];
+  }
+  if(!cell_kmax) {
+    cell_kmax = new int[n_cells];
+  }
+
+  // use the volumes variable to figure out 
+  float *volumes=read_cell_z_full("volume",timestate);
+  if ( !volumes ) return;
+
+  for(int cell2d=0;cell2d<n_cells;cell2d++)  {
+    // cell_kmin from first non-zero volume
+    int k;
+    for(k=0;
+        (k<n_layers) && (volumes[cell2d*n_layers+k] <= 0);
+        k++) ;
+
+    cell_kmin[cell2d]=k;
+    for(; (k<n_layers) && ( volumes[cell2d*n_layers+k]==volumes[cell2d*n_layers+k] );
+        k++) ;
+    cell_kmax[cell2d]=k;
+    ncells_3d += (cell_kmax[cell2d] - cell_kmin[cell2d]);
+  }
+
+  active_timestate=timestate;
+}
+
+
+float * VarInfo::read_cell_at_time(int timestate)
+{
+  size_t n_cells;
+  if ( nc_inq_dimlen(ncid,cell_dim,&n_cells) ) {
+    debug1 << "Somehow late read of n_cells failed" << endl;
+    return NULL;
+  }
+
+  float * result=new float[n_cells];
+  size_t startp[2];
+  size_t countp[2];
+
+  // assume that the dimensions are time,cell,layer
+  if( time_dimi >= 0 ){
+    startp[time_dimi] = timestate;
+    countp[time_dimi]=1;
+  }
+  startp[cell_dimi] = 0;
+  countp[cell_dimi]=n_cells;
+
+  if( nc_get_vara_float(ncid,var_id,startp,countp,result) ) {
+    debug1 << "Failed to read float array for " << name << endl;
+    delete[] result;
+    return NULL;
+  }
+  return result;
+}
+
+float *VarInfo::read_cell_z_at_time(int timestate) {
+  size_t n_cells,n_layers;
+
+  if ( nc_inq_dimlen(ncid,cell_dim,&n_cells) ||
+       nc_inq_dimlen(ncid,layer_dim,&n_layers) ) {
+    debug1 << "Somehow late read of n_cells or n_layers failed" << endl;
+    return NULL;
+  }
+
+  debug1 << "read_cell_z_at_time: allocating " << n_cells << "x" << n_layers << endl;
+
+  float * result=new float[n_cells*n_layers];
+  size_t startp[3];
+  size_t countp[3];
+
+  // assume that the dimensions are time,cell,layer
+  if( time_dimi>=0 ) {
+    startp[time_dimi] = timestate;
+    countp[time_dimi]=1;
+  } 
+
+  debug1 << "read_cell_z_at_time: time_dimi="<< time_dimi << endl;
+  debug1 << "                     cell_dimi="<< cell_dimi << endl;
+  debug1 << "                    layer_dimi="<< layer_dimi << endl;
+
+  startp[cell_dimi] = 0;
+  countp[cell_dimi]=n_cells;
+
+  startp[layer_dimi]=0;
+  countp[layer_dimi]=n_layers;
+
+  for(int i=0;i<3;i++){
+    debug1 << "dim " << i << ": start=" << startp[i] << "  count="<<countp[i] << endl;
+  }
+
+  char var_scan[NC_MAX_NAME];
+  if ( nc_inq_varname(ncid,var_id,var_scan) ) {
+    debug1 << "Failed to read varname for var_id=" << var_id << endl;
+    return NULL;
+  } else {
+    debug1 << "Expected var name " << name << " and queried to get " << var_scan << endl;
+  }
+
+  // this is failing, but not clear why...
+  // maybe double check to make sure that var_id is correct?
+  // could also print startp and countp, and query number of dimensions?
+
+  if( nc_get_vara_float(ncid,var_id,startp,countp,result) ) {
+    debug1 << "Failed to read 3D float array for " << name << endl;
+    delete[] result;
+    return NULL;
+  } else {
+    debug1 << "Successfully read 3D float array for " << name << endl;
+  }
+
+  return result;
+}
+
+// Read a 3D netcdf variable by name and timestate.  
+// Caller is responsible for freeing the result
+float *
+avtUGRIDFileFormat::read_cell_z_full(std::string varname,int timestate) 
+{
+  return var_table[varname].read_cell_z_at_time(timestate);
+}
 
 // ****************************************************************************
 //  Method: avtUGRIDFileFormat::GetVar
@@ -487,30 +992,52 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
 vtkDataArray *
 avtUGRIDFileFormat::GetVar(int timestate, const char *varname)
 {
-  //YOU MUST IMPLEMENT THIS
-  return NULL;
+  VarInfo vi=var_table[varname];
 
-    //
-    // If you have a file format where variables don't apply (for example a
-    // strictly polygonal format like the STL (Stereo Lithography) format,
-    // then uncomment the code below.
-    //
-    // EXCEPTION1(InvalidVariableException, varname);
-    //
+  if ( vi.layer_dimi >= 0 ) {
+    return GetVar3D(timestate,vi);
+  } else {
+    return GetVar2D(timestate,vi);
+  }
+}
 
-    //
-    // If you do have a scalar variable, here is some code that may be helpful.
-    //
-    // int ntuples = XXX; // this is the number of entries in the variable.
-    // vtkFloatArray *rv = vtkFloatArray::New();
-    // rv->SetNumberOfTuples(ntuples);
-    // for (int i = 0 ; i < ntuples ; i++)
-    // {
-    //      rv->SetTuple1(i, VAL);  // you must determine value for ith entry.
-    // }
-    //
-    // return rv;
-    //
+vtkDataArray *
+avtUGRIDFileFormat::GetVar3D(int timestate,VarInfo &vi)
+{ 
+  activateTimestate(timestate);
+
+  vtkFloatArray *rv = vtkFloatArray::New();
+  rv->SetNumberOfTuples(ncells_3d);
+  rv->SetNumberOfComponents(1);
+
+  float *full=read_cell_z_full(vi.name,timestate);
+  
+  int i3d=0;
+  for(int surf_cell=0;surf_cell<n_cells;surf_cell++) {
+    for(int k=cell_kmin[surf_cell];k<cell_kmax[surf_cell];k++) {
+      rv->SetTuple1(i3d,full[surf_cell*n_layers+k]);
+      i3d++;
+    }
+  }
+  delete[] full;
+  return rv;
+}
+
+vtkDataArray *
+avtUGRIDFileFormat::GetVar2D(int timestate,VarInfo &vi)
+{ 
+  activateTimestate(timestate);
+
+  vtkFloatArray *rv = vtkFloatArray::New();
+  rv->SetNumberOfTuples(n_cells);
+  rv->SetNumberOfComponents(1);
+
+  float *full=vi.read_cell_at_time(timestate);
+  
+  for(int i=0;i<n_cells;i++) {
+    rv->SetTuple1(i,full[i]);
+  }
+  return rv;
 }
 
 
@@ -570,3 +1097,9 @@ avtUGRIDFileFormat::GetVectorVar(int timestate, const char *varname)
     // return rv;
     //
 }
+
+
+// bathymetry variable is bogus - drop it
+// eta is mapped onto the 3D grid - should be the 2D grid
+// node depths are probably missing the mesh attribute, so
+// aren't making the list.
