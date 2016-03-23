@@ -69,10 +69,16 @@ using     std::string;
 VarInfo::VarInfo(std::string n) 
   : name(n) 
 {
-  VarInfo();
+  init();
 }
 
 VarInfo::VarInfo(void)
+{
+  init();
+}
+
+void
+VarInfo::init(void) 
 {
   time_dimi=cell_dimi=layer_dimi=node_dimi=-1;
   var_id=-1;
@@ -231,15 +237,28 @@ string avtUGRIDFileFormat::var_mesh(int varid) {
     // debug1 << "Failed to get length of mesh attribute" << endl;
     return "";
   }
-  char *mesh_name=new char[mesh_name_len+1];
+
+  char *mesh_name;
+  char *buff=new char[mesh_name_len+1];
   // wasn't working with nc_get_att_string...
-  if( nc_get_att_text(ncid,varid,"mesh",mesh_name) ) {
+  // oddly, it still fails sometimes.  what gives?
+  if( ! nc_get_att_text(ncid,varid,"mesh",buff) ) {
+    buff[mesh_name_len]='\0';
+    mesh_name=buff;
+  } else {
     debug1 << "Failed to find mesh attribute on variable" << endl;
-    return "";
+    
+    // not sure why, but maybe trying the other way?
+    if ( nc_get_att_string(ncid,varid,"mesh",&mesh_name) ) {
+      debug1 << " even with nc_get_att_string, failed to find mesh attribute!" << endl;
+      return "";
+    } 
+    debug1 << "Weird - nc_get_att_text failed, but nc_get_att_string worked" << endl;
   }
-  mesh_name[mesh_name_len]='\0';
   string result(mesh_name);
-  delete[] mesh_name;
+  delete[] buff;
+  debug1 << " Read mesh='" << result << "' for varid=" << varid << endl;
+
   return result;
 }
 
@@ -327,12 +346,8 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
                     3   // topological dimension
                     );
 
-  string mesh_for_this_var = ugrid_mesh+".2d"; 
-  string varname = "bathymetry";
-  //
+  // variable centering:
   // AVT_NODECENT, AVT_ZONECENT, AVT_UNKNOWN_CENT
-  avtCentering cent = AVT_NODECENT;
-  AddScalarVarToMetaData(md, varname, mesh_for_this_var, cent);
 
   AddMeshToMetaData(md,ugrid_mesh+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
 
@@ -370,6 +385,11 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
       VarInfo var_inf(var_scan);
       var_inf.var_id=var_num;
       var_inf.time_dim=time_dim;
+      // var_inf.time_dimi=-1;  // apparently....
+      // var_inf.cell_dimi=-1;  // this
+      // var_inf.layer_dimi=-1; // does need to be done...
+      // var_inf.node_dimi=-1;  // constructor not really doing it's job?
+
       // these will shortly be moved to a shared mesh object
       var_inf.layer_dim=layer_dim;
       var_inf.cell_dim=cell_dim;
@@ -398,6 +418,8 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
         debug1 << "Variable " << var_scan << " has extra dimensions.  Not ready..." << endl;
         continue;
       }
+
+      debug1 << "  layer_dimi: " << var_inf.layer_dimi << endl;
       
       if ( var_inf.layer_dimi>=0 ) {
         if ( var_inf.cell_dimi>=0 ) {
@@ -885,6 +907,8 @@ float * VarInfo::read_cell_at_time(int timestate)
     return NULL;
   }
 
+  debug1 << "read_cell_at_time: allocating " << n_cells << endl;
+
   float * result=new float[n_cells];
   size_t startp[2];
   size_t countp[2];
@@ -897,11 +921,16 @@ float * VarInfo::read_cell_at_time(int timestate)
   startp[cell_dimi] = 0;
   countp[cell_dimi]=n_cells;
 
+  for(int d=0;d<2;d++) {
+    //debug1 << "  startp[
+  }
+  
   if( nc_get_vara_float(ncid,var_id,startp,countp,result) ) {
     debug1 << "Failed to read float array for " << name << endl;
     delete[] result;
     return NULL;
   }
+  debug1 << "Finishing read_cell_at_time of " << name << endl;
   return result;
 }
 
@@ -995,8 +1024,10 @@ avtUGRIDFileFormat::GetVar(int timestate, const char *varname)
   VarInfo vi=var_table[varname];
 
   if ( vi.layer_dimi >= 0 ) {
+    debug1 << "GetVar(" << timestate << "," << varname << ") => GetVar3D" << endl;
     return GetVar3D(timestate,vi);
   } else {
+    debug1 << "GetVar(" << timestate << "," << varname << ") => GetVar2D" << endl;
     return GetVar2D(timestate,vi);
   }
 }
@@ -1032,11 +1063,14 @@ avtUGRIDFileFormat::GetVar2D(int timestate,VarInfo &vi)
   rv->SetNumberOfTuples(n_cells);
   rv->SetNumberOfComponents(1);
 
+  debug1 << "GetVar2D(" << timestate << "," << vi.name << ") allocated " << n_cells << endl;
   float *full=vi.read_cell_at_time(timestate);
   
   for(int i=0;i<n_cells;i++) {
     rv->SetTuple1(i,full[i]);
   }
+
+  debug1 << "Done with GetVar2D for " << vi.name << endl;
   return rv;
 }
 
@@ -1099,7 +1133,10 @@ avtUGRIDFileFormat::GetVectorVar(int timestate, const char *varname)
 }
 
 
-// bathymetry variable is bogus - drop it
-// eta is mapped onto the 3D grid - should be the 2D grid
-// node depths are probably missing the mesh attribute, so
-// aren't making the list.
+// FlowElem_bl now shows up
+// some weird stuff in eta near the end of the run -
+// probably best to wait and compare with a more up to date run.
+
+// things to fix in the netcdf: 
+//  add mesh attribute to more variables - like _zcc
+//  need to figure out proper way of dealing with volume, vertical coordinates, etc.

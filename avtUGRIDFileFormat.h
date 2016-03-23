@@ -66,6 +66,7 @@ public:
   VarInfo(std::string);
   VarInfo(void);
   VarInfo(const VarInfo &);
+  void init(void);
   
   float *read_cell_at_time(int);
   float *read_cell_z_at_time(int);
