@@ -455,23 +455,45 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
 
       debug1 << "  layer_dimi: " << var_inf.layer_dimi << endl;
       
+      avtScalarMetaData *smd=new avtScalarMetaData;
+      smd->name=var_scan;
+      string units=get_att_as_string(ncid,var_inf.var_id,"units");
+      if (units != "" ) {
+        smd->hasUnits=true;
+        smd->units=units;
+      }
+      
       if ( var_inf.layer_dimi>=0 ) {
+        smd->meshName=var_inf.mesh_name+".3d";
         if ( var_inf.cell_dimi>=0 ) {
-          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_ZONECENT);
+          smd->centering=AVT_ZONECENT;
+          md->Add(smd);
+          // AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_ZONECENT);
         } else if( var_inf.node_dimi>=0 ) {
           // probably don't have any of these
-          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_NODECENT);
+          smd->centering=AVT_NODECENT;
+          md->Add(smd);
+          // AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_NODECENT);
         } else {
+          delete smd;
+          smd=NULL;
           debug1 << "Will ignore " << var_scan << " b/c it doesn't have a horizontal dimension"
                  << endl;
         }
       } else { 
         // no layer
+        smd->meshName=var_inf.mesh_name+".2d";
         if ( var_inf.cell_dimi>=0 ) {
-          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".2d", AVT_ZONECENT);
+          smd->centering=AVT_ZONECENT;
+          md->Add(smd);
+          // AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".2d", AVT_ZONECENT);
         } else if ( var_inf.node_dimi>=0 ) {
-          AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".2d", AVT_NODECENT);
+          smd->centering=AVT_NODECENT;
+          md->Add(smd);
+          //AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".2d", AVT_NODECENT);
         } else {
+          delete smd;
+          smd=NULL;
           debug1 << "Will ignore " << var_scan << " b/c it doesn't have a horizontal dimension"
                  << endl;
         }
