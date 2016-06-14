@@ -65,6 +65,39 @@
 
 using     std::string;
 
+// for some reason, there are two ways to read string attributes
+// and it's difficult to predict which is correct.
+string get_att_as_string(int ncid,int mesh_var,const char *att_name) {
+  int retval;
+  char *att_data;
+  string result("");
+
+  if ( !(retval=nc_get_att_string(ncid, mesh_var, att_name,&att_data)) ) {
+    result=att_data; // is that legal?
+    return result;
+  }
+
+  debug1 << "nc_get_att_string failed, will trying get_att_text" << endl;
+
+  // is it possible that we have to test for text or string??
+  size_t att_len;
+  if ( nc_inq_attlen(ncid,mesh_var,att_name,&att_len) ) {
+    debug1 << "attlen also failed" << endl;
+    return result;
+  }
+
+  char *buff=new char[att_len+1];
+  if ( nc_get_att_text(ncid,mesh_var,att_name,buff ) ) {
+    delete[] buff;
+    return result;
+  }
+
+  buff[att_len]='\0';
+  result=buff;
+  delete[] buff;
+  return result;
+}
+
 
 VarInfo::VarInfo(std::string n) 
   : name(n) 
@@ -99,7 +132,8 @@ VarInfo::VarInfo(const VarInfo &a)
   layer_dim=a.layer_dim;
   node_dim=a.node_dim;
   var_id=a.var_id;
-  debug1 << "Copied a varinfo with var_id " << var_id << endl;
+  // I think this actually happens pretty often...
+  // debug1 << "Copied a varinfo with var_id " << var_id << endl;
   ncid=a.ncid;
 }
 
@@ -183,14 +217,11 @@ avtUGRIDFileFormat::avtUGRIDFileFormat(const char *filename)
   }
 
   debug1 << "UGRID: poking around for node coordinates " << endl;
+  debug1 << "UGRID: mesh_var for that mesh name is " << mesh_var << endl;
 
-  char *att_data;
-  if ( nc_get_att_string(ncid, mesh_var, "node_coordinates",&att_data) ) {
-    debug1 << "Failed to read from node coordinates" << endl;
-    return;
-  }
+  string node_coords=get_att_as_string(ncid,mesh_var,"node_coordinates");
+  if( node_coords=="" ) return;
 
-  string node_coords(att_data);
   // netcdf says we have to do this, but it's causing problems...
   //nc_free_string(strlen(att_data),&att_data);
 
@@ -232,34 +263,37 @@ string avtUGRIDFileFormat::var_mesh(std::string varname) {
 }
 
 string avtUGRIDFileFormat::var_mesh(int varid) {
-  size_t mesh_name_len;
-  if ( nc_inq_attlen(ncid,varid,"mesh",&mesh_name_len) ) {
-    // debug1 << "Failed to get length of mesh attribute" << endl;
-    return "";
-  }
+  // any reason not to use this same convenience util?
+  return get_att_as_string(ncid,varid,"mesh");
 
-  char *mesh_name;
-  char *buff=new char[mesh_name_len+1];
-  // wasn't working with nc_get_att_string...
-  // oddly, it still fails sometimes.  what gives?
-  if( ! nc_get_att_text(ncid,varid,"mesh",buff) ) {
-    buff[mesh_name_len]='\0';
-    mesh_name=buff;
-  } else {
-    debug1 << "Failed to find mesh attribute on variable" << endl;
-    
-    // not sure why, but maybe trying the other way?
-    if ( nc_get_att_string(ncid,varid,"mesh",&mesh_name) ) {
-      debug1 << " even with nc_get_att_string, failed to find mesh attribute!" << endl;
-      return "";
-    } 
-    debug1 << "Weird - nc_get_att_text failed, but nc_get_att_string worked" << endl;
-  }
-  string result(mesh_name);
-  delete[] buff;
-  debug1 << " Read mesh='" << result << "' for varid=" << varid << endl;
-
-  return result;
+  // size_t mesh_name_len;
+  // if ( nc_inq_attlen(ncid,varid,"mesh",&mesh_name_len) ) {
+  //   // debug1 << "Failed to get length of mesh attribute" << endl;
+  //   return "";
+  // }
+  // 
+  // char *mesh_name;
+  // char *buff=new char[mesh_name_len+1];
+  // // wasn't working with nc_get_att_string...
+  // // oddly, it still fails sometimes.  what gives?
+  // if( ! nc_get_att_text(ncid,varid,"mesh",buff) ) {
+  //   buff[mesh_name_len]='\0';
+  //   mesh_name=buff;
+  // } else {
+  //   debug1 << "Failed to find mesh attribute on variable" << endl;
+  //   
+  //   // not sure why, but maybe trying the other way?
+  //   if ( nc_get_att_string(ncid,varid,"mesh",&mesh_name) ) {
+  //     debug1 << " even with nc_get_att_string, failed to find mesh attribute!" << endl;
+  //     return "";
+  //   } 
+  //   debug1 << "Weird - nc_get_att_text failed, but nc_get_att_string worked" << endl;
+  // }
+  // string result(mesh_name);
+  // delete[] buff;
+  // debug1 << " Read mesh='" << result << "' for varid=" << varid << endl;
+  // 
+  // return result;
 }
 
 // ****************************************************************************
@@ -446,21 +480,21 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
     }
   }
   
-    //
-    // CODE TO ADD A VECTOR VARIABLE
-    //
-    // string mesh_for_this_var = meshname; // ??? -- could be multiple meshes
-    // string varname = ...
-    // int vector_dim = 2;
-    //
-    // AVT_NODECENT, AVT_ZONECENT, AVT_UNKNOWN_CENT
-    // avtCentering cent = AVT_NODECENT;
-    //
-    //
-    // Here's the call that tells the meta-data object that we have a var:
-    //
-    // AddVectorVarToMetaData(md, varname, mesh_for_this_var, cent,vector_dim);
-    //
+  //
+  // CODE TO ADD A VECTOR VARIABLE
+  //
+  // string mesh_for_this_var = meshname; // ??? -- could be multiple meshes
+  // string varname = ...
+  // int vector_dim = 2;
+  //
+  // AVT_NODECENT, AVT_ZONECENT, AVT_UNKNOWN_CENT
+  // avtCentering cent = AVT_NODECENT;
+  //
+  //
+  // Here's the call that tells the meta-data object that we have a var:
+  //
+  // AddVectorVarToMetaData(md, varname, mesh_for_this_var, cent,vector_dim);
+  //
 }
 
 
@@ -584,13 +618,8 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
 
   nc_type xtype;
   
-  char *att_data;
-  if ( nc_get_att_string(ncid, mesh_var, "face_node_connectivity",&att_data) ) {
-    debug1 << "Failed to read face_node_connectivity" << endl;
-    return NULL;
-  }
+  string face_node=get_att_as_string(ncid,mesh_var,"face_node_connectivity");
 
-  string face_node(att_data);
   // netcdf says we have to do this, but it's causing problems...
   //nc_free_string(strlen(att_data),&att_data);
 
@@ -700,13 +729,13 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
   }
 
   // and the bounds variable?
-  char *bounds_name;
-  int bounds_var;
-  if ( nc_get_att_string(ncid, layer_var, "bounds",&bounds_name) ) {
-    debug1 << "Failed to find bouns attribute" << endl;
+  string bounds_name=get_att_as_string(ncid,layer_var,"bounds");
+  if ( bounds_name == "" ) {
+    debug1 << "Failed to find bounds attribute" << endl;
     return NULL;
   }
-  if( nc_inq_varid(ncid,bounds_name,&bounds_var) ) {
+  int bounds_var;
+  if( nc_inq_varid(ncid,bounds_name.c_str(),&bounds_var) ) {
     debug1 << "Failed to find bounds variable" << endl;
     return NULL;
   }
