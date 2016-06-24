@@ -108,6 +108,8 @@ class avtUGRIDFileFormat : public avtMTSDFileFormat
     //
 
     virtual int            GetNTimesteps(void);
+    virtual void           GetTimes(std::vector<double> &);
+    virtual void           GetCycles(std::vector<int> &);
 
     virtual const char    *GetType(void)   { return "UGRID"; };
     virtual void           FreeUpResources(void); 

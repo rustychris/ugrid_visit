@@ -67,12 +67,12 @@ using     std::string;
 
 // for some reason, there are two ways to read string attributes
 // and it's difficult to predict which is correct.
-string get_att_as_string(int ncid,int mesh_var,const char *att_name) {
+string get_att_as_string(int ncid,int varid,const char *att_name) {
   int retval;
   char *att_data;
   string result("");
 
-  if ( !(retval=nc_get_att_string(ncid, mesh_var, att_name,&att_data)) ) {
+  if ( !(retval=nc_get_att_string(ncid, varid, att_name,&att_data)) ) {
     result=att_data; // is that legal?
     return result;
   }
@@ -81,13 +81,13 @@ string get_att_as_string(int ncid,int mesh_var,const char *att_name) {
 
   // is it possible that we have to test for text or string??
   size_t att_len;
-  if ( nc_inq_attlen(ncid,mesh_var,att_name,&att_len) ) {
+  if ( nc_inq_attlen(ncid,varid,att_name,&att_len) ) {
     debug1 << "attlen also failed" << endl;
     return result;
   }
 
   char *buff=new char[att_len+1];
-  if ( nc_get_att_text(ncid,mesh_var,att_name,buff ) ) {
+  if ( nc_get_att_text(ncid,varid,att_name,buff ) ) {
     delete[] buff;
     return result;
   }
@@ -316,6 +316,65 @@ avtUGRIDFileFormat::GetNTimesteps(void)
 
   return length;
 }
+
+void avtUGRIDFileFormat::GetCycles(std::vector<int> &cycles)
+{
+  int nsteps=GetNTimesteps();
+
+  if ( nsteps == 0 ) {
+    // put in a fake 0 timestep
+    cycles.push_back(0);
+  } else {
+    for(int i=0;i<nsteps;i++) {
+      cycles.push_back(i);
+    }
+  }
+}
+
+
+void avtUGRIDFileFormat::GetTimes(std::vector<double> &times)
+{
+  // use days to make it a bit friendlier
+  size_t startp[1]; // safely assume that time is one-dimensional
+  size_t countp[1];
+
+  countp[0]=GetNTimesteps();
+  startp[0]=0;
+
+  double *result=new double[countp[0]];
+
+  if( nc_get_vara_double(ncid,time_var,startp,countp,result) ) {
+    debug1 << "Failed to read double array for time " << endl;
+    delete[] result;
+  }
+
+  double to_days=1;
+
+  string units=get_att_as_string(ncid,time_var,"units");
+
+  if ( units.find("second")== 0) {
+    to_days=1./86400;
+  } else if ( units.find("minute")==0 ) {
+    to_days=1./(24*60);
+  } else if ( units.find("hour")==0) {
+    to_days=1./24;
+  } else if ( units.find("day")==0 ) {
+    to_days=1.;
+  } else {
+    debug1 << "UGRID::GetTimes: couldn't understand units " << units << endl;
+  }
+
+  if ( countp[0] == 0 ) {
+    // put in a fake 0 timestep
+    times.push_back(0.0);
+  } else {
+    for(int i=0;i<countp[0];i++) {
+      times.push_back(result[i]*to_days);
+    }
+  }
+  delete[] result;
+}
+
 
 
 // ****************************************************************************
