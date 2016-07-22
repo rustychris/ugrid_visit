@@ -49,6 +49,7 @@
 #include <vector>
 #include <map>
 
+#define MAX_SIDES 50
 
 class VarInfo {
 public:

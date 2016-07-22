@@ -54,6 +54,8 @@
 #include <vtkUnstructuredGrid.h>
 #include <vtkPoints.h>
 #include <vtkCellType.h>
+#include <vtkCellArray.h>
+#include <vtkSmartPointer.h>
 
 #include <avtDatabaseMetaData.h>
 
@@ -768,11 +770,53 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
   delete[] faces;
   
   if ( ndim==3 ) {
-    return ExtrudeTo3D(ugrid_mesh,timestate,mesh);
+    debug1 << "UGRID: Extruding grid" << endl;
+    vtkDataSet *result=ExtrudeTo3D(ugrid_mesh,timestate,mesh);
+    debug1 << "UGRID: got extruded grid" << endl;
+    return result;
   } else {
     return mesh;
   }
 }
+
+/**
+   Dirty work of creating a prism with more than 6 nodes on top and bottom
+ **/ 
+void
+insertNPrism(vtkUnstructuredGrid *full_mesh,
+             int npoints2d,
+             vtkIdType *point_ids) {
+  // following http://www.vtk.org/Wiki/VTK/Examples/Cxx/GeometricObjects/Polyhedron
+  vtkSmartPointer<vtkCellArray> faces =
+    vtkSmartPointer<vtkCellArray>::New();
+
+  vtkIdType *face=new vtkIdType[npoints2d];
+
+  // create the top:
+  for(int i=0;i<npoints2d;i++) {
+    face[i]=point_ids[i];
+  }
+  faces->InsertNextCell(npoints2d, face);
+  // and the bottom:
+  for(int i=0;i<npoints2d;i++) {
+    face[i]=point_ids[npoints2d+i];
+  }
+  faces->InsertNextCell(npoints2d, face);
+
+  // and each side facet:
+  for(int facet=0;facet<npoints2d;facet++) {
+    face[0]=point_ids[facet];
+    face[1]=point_ids[(facet+1)%npoints2d];
+    face[2]=point_ids[npoints2d+(facet+1)%npoints2d];
+    face[3]=point_ids[npoints2d+facet];
+    faces->InsertNextCell(4,face);
+  }
+
+  full_mesh->InsertNextCell(VTK_POLYHEDRON, 2*npoints2d, point_ids,
+                            2+npoints2d, faces->GetPointer());
+  delete[] face;
+}
+
 
 vtkDataSet *
 avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
@@ -865,8 +909,8 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
   vtkIdType surf_cell_npoints;
   vtkIdType *surf_cell_point_ids;
   
-  // 2*6: top and bottom points, up to a hexagonal prism
-  vtkIdType new_cell_point_ids[2*6];
+  // 2*MAX_SIDES: top and bottom points, up to a hexagonal prism, or larger??
+  vtkIdType new_cell_point_ids[2*MAX_SIDES];
   
   // full_cell2valid provides a mapping of expected cell index to
   //  actual cell index;
@@ -905,16 +949,22 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
       surf_cell_id<n_cells ;
       surf_cell_id++ ) {
     // need to acount for different number of sides
-    int npoints=0;
+    // int npoints=0;
     
     surface->GetCellPoints(surf_cell_id,
                            surf_cell_npoints,surf_cell_point_ids);
+
+    if( surf_cell_npoints > MAX_SIDES ) {
+      debug1 << "Cell has too many points - truncating! " << surf_cell_npoints << " to " << MAX_SIDES << endl;
+      surf_cell_npoints=MAX_SIDES;
+    }
    
     int k; // index into vertical cells
     
     for(k=cell_kmin[surf_cell_id];
         k<cell_kmax[surf_cell_id];
         k++) {
+      
       /// The Visit manual shows this as 0-1-2 being one triangular
       // face with outward-facing normal, and 3-4-5 being the other
       // end with inward-facing normal (where the normal is defined
@@ -948,7 +998,8 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
         full_mesh->InsertNextCell(VTK_HEXAGONAL_PRISM, 12, new_cell_point_ids);
       } else {
         debug1 << "Surface cell has " << surf_cell_npoints << " points, which is simply too many" << endl;
-        full_mesh->InsertNextCell(VTK_HEXAGONAL_PRISM, 12, new_cell_point_ids);
+        insertNPrism(full_mesh,surf_cell_npoints,new_cell_point_ids);
+        // full_mesh->InsertNextCell(VTK_HEXAGONAL_PRISM, 12, new_cell_point_ids);
       }
       
       // update the mapping of cell ids:
@@ -961,7 +1012,8 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
       real_cell_id++;
     }
   }
-    
+  debug1 << "Done constructing 3D cells" << endl;
+  
   // hopefully it's okay to set the points here, *after* defining the cells
   full_mesh->SetPoints(all_points);
   all_points->Delete();
@@ -970,6 +1022,9 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
   // n_3d_cells = full_mesh->GetNumberOfCells();
 
   full_mesh->Register(NULL);
+
+  debug1 << "Return 3D mesh" << endl;
+
   return full_mesh;
 }
 
