@@ -781,6 +781,8 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
 
 /**
    Dirty work of creating a prism with more than 6 nodes on top and bottom
+   TODO: the ordering of the points is likely incorrect.  See the example
+   for the proper sign convention.
  **/ 
 void
 insertNPrism(vtkUnstructuredGrid *full_mesh,
