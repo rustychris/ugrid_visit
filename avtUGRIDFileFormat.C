@@ -781,8 +781,13 @@ avtUGRIDFileFormat::GetMesh(int timestate, const char *meshname)
 
 /**
    Dirty work of creating a prism with more than 6 nodes on top and bottom
-   TODO: the ordering of the points is likely incorrect.  See the example
-   for the proper sign convention.
+   Ordering of the points making up faces is in the sense of a positive 
+   outward facing normal.  i.e. a right-hand rule curling in the order of
+   nodes gives the outward normal.  Equivalently, when viewed from outside
+   the volume, nodes are ordered CCW.
+
+   Assume that internally the nodes of a cell are stored in CCW order.  So
+   the top face of the prism is already in the proper order.
  **/ 
 void
 insertNPrism(vtkUnstructuredGrid *full_mesh,
@@ -796,21 +801,21 @@ insertNPrism(vtkUnstructuredGrid *full_mesh,
 
   // create the top:
   for(int i=0;i<npoints2d;i++) {
-    face[i]=point_ids[i];
+    face[i]=point_ids[i]; // already proper order, I think.
   }
   faces->InsertNextCell(npoints2d, face);
-  // and the bottom:
   for(int i=0;i<npoints2d;i++) {
-    face[i]=point_ids[npoints2d+i];
+    // and the bottom - reverse the order
+    face[i]=point_ids[2*npoints2d - 1 - i]; // old: npoints2d+i
   }
   faces->InsertNextCell(npoints2d, face);
 
   // and each side facet:
   for(int facet=0;facet<npoints2d;facet++) {
-    face[0]=point_ids[facet];
-    face[1]=point_ids[(facet+1)%npoints2d];
-    face[2]=point_ids[npoints2d+(facet+1)%npoints2d];
-    face[3]=point_ids[npoints2d+facet];
+    face[3]=point_ids[facet];
+    face[2]=point_ids[(facet+1)%npoints2d];
+    face[1]=point_ids[npoints2d+(facet+1)%npoints2d];
+    face[0]=point_ids[npoints2d+facet];
     faces->InsertNextCell(4,face);
   }
 
@@ -833,6 +838,7 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
   // copy the z=0 points from the flat surface, and then repeat
   // for each z-value 
   int n_surf_points = surface->GetNumberOfPoints();
+  int offset;
   
   // for z-grid:
   //   have a vertical dimension - in the current file, nFlowMesh_layers
@@ -924,7 +930,6 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
   //  upsets the mapping of points to different depths (bottom points
   //   can't be reused, and the numbering gets all funky)
   
-  // HERE
   // Fetch the depth values in order to evaluate the bottom cells
   // this is a little different for the ugrid stuff.
   //  probably have node-centered depth
@@ -973,19 +978,32 @@ avtUGRIDFileFormat::ExtrudeTo3D(string ugrid_mesh,int timestate,
       // as outward on CCW ordered vertices)
       // if this really angers Visit, may have to test ordering here
       // and reverse top/bottom if vertices are in wrong order.
+
+      // but the general polyhedron wants entirely outward facing
+      // normals.
+      // and the illustration of thw VTK_HEXAHEDRON 
+      // shows 0,1,2,3 having an inward facing normal.
       
       // at some point we might add new bottom points to allow
       // for partial cell depths, but for now just do stair-stepping
+
+      // tricky loop modification to order the nodes in the right way
+      // for the different cell types.
+      if( surf_cell_npoints==3 || surf_cell_npoints>6 )
+        offset=0;
+      else
+        offset=surf_cell_npoints;
       
       // the upper level:
       for (int vertex=0;vertex<surf_cell_npoints;vertex++) {
-        new_cell_point_ids[vertex] = k*n_surf_points + surf_cell_point_ids[vertex];
+        new_cell_point_ids[vertex+offset] = k*n_surf_points + surf_cell_point_ids[vertex];
       }
-        
-      // STAIRSTEPPING:
+
+      offset=surf_cell_npoints-offset;
+      
       // the lower level:
       for (int vertex=0;vertex<surf_cell_npoints;vertex++) {
-        new_cell_point_ids[surf_cell_npoints+vertex] = (k+1)*n_surf_points + 
+        new_cell_point_ids[vertex+offset] = (k+1)*n_surf_points + 
           surf_cell_point_ids[vertex];
       }
         
