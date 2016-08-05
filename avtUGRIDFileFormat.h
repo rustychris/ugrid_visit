@@ -51,17 +51,18 @@
 
 #define MAX_SIDES 50
 
-class Mesh2DInfo {
+
+class MeshInfo {
 public:
   std::string name;
   int ncid,varid;
 
-  int node_dim, cell_dim;
+  int node_dim, cell_dim, layer_dim;
   int node_x_var,node_y_var;
-  size_t n_nodes, n_cells;
+  size_t n_nodes, n_cells, n_layers;
 
-  Mesh2DInfo(int ncid,int varid);
-  Mesh2DInfo() {ncid=-1 ; varid=-1; }
+  MeshInfo(int ncid,int varid);
+  MeshInfo() {ncid=-1 ; varid=-1; };
   vtkPoints *GetNodes(void);
   vtkDataSet *GetMesh(int timestate);
 };
@@ -70,13 +71,15 @@ class VarInfo {
 public:
   std::string name;
   std::string mesh_name;
+  std::vector<std::string> spatial_dim_names;
 
   // these are -1 if not present, and otherwise
   // give where the respective dimension falls in the variable definition.
   int time_dimi,cell_dimi,layer_dimi,node_dimi;
-  // really these ought to be stored in a mesh object - shared among variables
-  // which live on the same grid.
-  int time_dim,cell_dim,layer_dim,node_dim;
+  // cell, layer, node are stored in a mesh object - shared among variables
+  // which live on the same grid.  time_dim is trickier - for a static grid,
+  // doesn't necessarily need to be shared.
+  int time_dim; // ,cell_dim,layer_dim,node_dim;
   int var_id,ncid;
 
   VarInfo(std::string);
@@ -84,8 +87,8 @@ public:
   VarInfo(const VarInfo &);
   void init(void);
   
-  float *read_cell_at_time(int);
-  float *read_cell_z_at_time(int);
+  float *read_cell_at_time(int,MeshInfo &);
+  float *read_cell_z_at_time(int,MeshInfo &);
 };
 
 // ****************************************************************************
@@ -123,16 +126,16 @@ class avtUGRIDFileFormat : public avtMTSDFileFormat
     // virtual void        GetTimes(std::vector<double> &);
     //
 
-    virtual int            GetNTimesteps(void);
-    virtual void           GetTimes(std::vector<double> &);
-    virtual void           GetCycles(std::vector<int> &);
+  virtual int            GetNTimesteps(void);
+  virtual void           GetTimes(std::vector<double> &);
+  virtual void           GetCycles(std::vector<int> &);
 
-    virtual const char    *GetType(void)   { return "UGRID"; };
-    virtual void           FreeUpResources(void); 
+  virtual const char    *GetType(void)   { return "UGRID"; };
+  virtual void           FreeUpResources(void); 
 
-    virtual vtkDataSet    *GetMesh(int, const char *);
-    virtual vtkDataArray  *GetVar(int, const char *);
-    virtual vtkDataArray  *GetVectorVar(int, const char *);
+  virtual vtkDataSet    *GetMesh(int, const char *);
+  virtual vtkDataArray  *GetVar(int, const char *);
+  virtual vtkDataArray  *GetVectorVar(int, const char *);
 
   vtkUnstructuredGrid *GetMeshNodes(const std::string);
   vtkDataSet *ExtrudeTo3D(const std::string,int,vtkUnstructuredGrid *);
@@ -141,7 +144,7 @@ class avtUGRIDFileFormat : public avtMTSDFileFormat
 protected:
   // DATA MEMBERS
 
-  virtual void           PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
+  virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
 
   int ncid; // handle for netcdf file
   int time_dim; // ,node_dim,cell_dim,layer_dim;
@@ -149,7 +152,7 @@ protected:
   // int node_x_var,node_y_var;
   std::string default_ugrid_mesh;
   std::map<std::string,VarInfo> var_table;
-  std::map<std::string,Mesh2DInfo> mesh2d_table;
+  std::map<std::string,MeshInfo> mesh_table;
 
   // basic dimensions 
   // size_t n_nodes,n_cells,n_layers;
@@ -165,6 +168,7 @@ protected:
 
   std::string var_mesh2d(std::string);
   std::string var_mesh2d(int);
+  bool setMeshInfo(VarInfo &);
 
   void activateTimestate(int);
   // various geometry-related data specific to the active timestate

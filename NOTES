@@ -14,3 +14,18 @@ Made some progress - in theory should be able to display the 2D mesh, but
 it's getting a segfault.
 
 
+Loads/displays the Mesh2D.nodes mesh okay.
+But segfaults one the 2D grid.
+
+ - gets to the end of GetMesh - then no other info, and seg fault.
+
+ - valgrind --trace-children=yes visit...
+   tons of tons of output.
+   possibly segfault from  vtkCellLinks
+
+ one issue is that I've been assuming start_index=0, but it's a start_index=1 file.
+ also should pay attention to fill value.
+ Fixed - fill_value is already handled, and obeying start_index for face_node_connectivity
+ solves the seg fault.  Now displays the 2D grid!
+
+
