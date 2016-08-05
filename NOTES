@@ -1,0 +1,16 @@
+DFM output (nc output, not the UGRID option)
+
+couldn't find mesh variable id FlowMesh
+
+=> add code to search for cf_role=='mesh_topology' DONE
+
+Old code depended on some key variables -
+ vol_var: used to figure out cell_dim, layer_dim
+
+Hmm - probably have to shift to more variable driven. So we scan the variables,
+building up meshes as needed to support the variables encountered.
+
+Made some progress - in theory should be able to display the 2D mesh, but
+it's getting a segfault.
+
+

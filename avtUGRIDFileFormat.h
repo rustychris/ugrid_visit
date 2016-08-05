@@ -51,6 +51,21 @@
 
 #define MAX_SIDES 50
 
+class Mesh2DInfo {
+public:
+  std::string name;
+  int ncid,varid;
+
+  int node_dim, cell_dim;
+  int node_x_var,node_y_var;
+  size_t n_nodes, n_cells;
+
+  Mesh2DInfo(int ncid,int varid);
+  Mesh2DInfo() {ncid=-1 ; varid=-1; }
+  vtkPoints *GetNodes(void);
+  vtkDataSet *GetMesh(int timestate);
+};
+
 class VarInfo {
 public:
   std::string name;
@@ -129,20 +144,19 @@ protected:
   virtual void           PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
 
   int ncid; // handle for netcdf file
-  int time_dim,node_dim,cell_dim,layer_dim;
-  int time_var, mesh_var;
-  int node_x_var,node_y_var;
+  int time_dim; // ,node_dim,cell_dim,layer_dim;
+  int time_var; // , mesh_var;
+  // int node_x_var,node_y_var;
   std::string default_ugrid_mesh;
   std::map<std::string,VarInfo> var_table;
-
+  std::map<std::string,Mesh2DInfo> mesh2d_table;
 
   // basic dimensions 
-  size_t n_nodes,n_cells,n_layers;
+  // size_t n_nodes,n_cells,n_layers;
 
   // map 3D cell ids to real cells, because cells that are
   // underground are not output.
   std::map<int,int> full_cell2valid;
-
 
   // netcdf helpers:
   // read a full field of values at a given timestate
