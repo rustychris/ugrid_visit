@@ -100,6 +100,9 @@ string get_att_as_string(int ncid,int varid,const char *att_name) {
   return result;
 }
 
+
+//////////---- Mesh2DInfo ----//////////
+
 Mesh2DInfo::Mesh2DInfo(int _ncid, int mesh_var)
 {
   char var_scan[NC_MAX_NAME];
@@ -268,6 +271,8 @@ Mesh2DInfo::GetMesh(int timestate)
   return mesh;
 }
 
+//////////---- VarInfo ----//////////
+
 VarInfo::VarInfo(std::string n) 
   : name(n) 
 {
@@ -377,44 +382,23 @@ avtUGRIDFileFormat::~avtUGRIDFileFormat() {
   delete[] cell_kmax;
 }
 
-string avtUGRIDFileFormat::var_mesh(std::string varname) {
+string avtUGRIDFileFormat::var_mesh2d(std::string varname) {
   int varid;
   nc_inq_varid(ncid,varname.c_str(),&varid);
-  return var_mesh(varid);
+  return var_mesh2d(varid);
 }
 
-string avtUGRIDFileFormat::var_mesh(int varid) {
+string avtUGRIDFileFormat::var_mesh2d(int varid) {
   // any reason not to use this same convenience util?
-  return get_att_as_string(ncid,varid,"mesh");
+  string result=get_att_as_string(ncid,varid,"mesh");
 
-  // size_t mesh_name_len;
-  // if ( nc_inq_attlen(ncid,varid,"mesh",&mesh_name_len) ) {
-  //   // debug1 << "Failed to get length of mesh attribute" << endl;
-  //   return "";
-  // }
-  // 
-  // char *mesh_name;
-  // char *buff=new char[mesh_name_len+1];
-  // // wasn't working with nc_get_att_string...
-  // // oddly, it still fails sometimes.  what gives?
-  // if( ! nc_get_att_text(ncid,varid,"mesh",buff) ) {
-  //   buff[mesh_name_len]='\0';
-  //   mesh_name=buff;
-  // } else {
-  //   debug1 << "Failed to find mesh attribute on variable" << endl;
-  //   
-  //   // not sure why, but maybe trying the other way?
-  //   if ( nc_get_att_string(ncid,varid,"mesh",&mesh_name) ) {
-  //     debug1 << " even with nc_get_att_string, failed to find mesh attribute!" << endl;
-  //     return "";
-  //   } 
-  //   debug1 << "Weird - nc_get_att_text failed, but nc_get_att_string worked" << endl;
-  // }
-  // string result(mesh_name);
-  // delete[] buff;
-  // debug1 << " Read mesh='" << result << "' for varid=" << varid << endl;
-  // 
-  // return result;
+  if( result=="" ) {
+    result=default_ugrid_mesh;
+    debug1 << "No mesh attribute - using default" << endl;
+  } else if( result != default_ugrid_mesh ) {
+    debug1 << "Found another ugrid mesh.  Hold on tight." << endl;
+  }
+  return result;
 }
 
 // ****************************************************************************
@@ -547,16 +531,22 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
   int topological_dimension = 2;
   double *extents = NULL;
 
-  // add any 2D meshes 
+  // add any 2D meshes with their given name from the netcdf
+  // create a nodes mesh while we're at it.
+  
   for (std::map<std::string,Mesh2DInfo>::iterator it=mesh2d_table.begin();
        it!=mesh2d_table.end();
        ++it) {
     AddMeshToMetaData(md, it->second.name, mt, extents, nblocks, block_origin,
                       spatial_dimension, topological_dimension);
+    
+    AddMeshToMetaData(md,it->second.name+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
   }
 
   return; // DBG
 
+  // This 3D part is now on-demand, as we scan the variables.
+  
   //    AddMeshToMetaData(md, 
   //                      ugrid_mesh+".3d", // mesh name
   //                      AVT_UNSTRUCTURED_MESH, // mesh type
@@ -569,54 +559,76 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
   //    
   //    // variable centering:
   //    // AVT_NODECENT, AVT_ZONECENT, AVT_UNKNOWN_CENT
-  //    
-  //    AddMeshToMetaData(md,ugrid_mesh+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
-  //    
-  //    // Loop through variables in file, trying to match them to grids
-  //    // and register with metadata
-  //    int nvars;
-  //    if ( nc_inq_nvars(ncid,&nvars) ) {
-  //      debug1 << "Failed. How could nc_inq_nvars fail??" << endl;
-  //      return;
-  //    }
-  //    
-  //    debug1 << "UGRID: Scanning variable definitions" << endl;
-  //    
-  //    char var_scan[NC_MAX_NAME];
-  //    
-  //    for(int var_num=0;var_num<nvars;var_num++) {
-  //      if ( nc_inq_varname(ncid,var_num,var_scan) ) {
-  //        debug1 << "Failed to read name of variable at index " << var_num << endl;
-  //      } else {
-  //        debug1 << "Variable: "<<var_scan << " [" << var_num << "]" <<endl;
-  //    
-  //        // read dimensions - if it has either cell/node and a layer dimension, assign to
-  //        // 3D mesh.
-  //        // if just cell/node, put it on the 2d mesh.
-  //        int dims[6]; // who would have more than 6 dimensions??
-  //        int ndim;
-  //    
-  //        if( nc_inq_varndims(ncid,var_num,&ndim) || 
-  //            nc_inq_vardimid(ncid,var_num,dims) ) {
-  //          debug1 << "Failed.  How did that happen?" << endl;
-  //          continue;
-  //        }
-  //        int extra_dims=0;
-  //    
-  //        VarInfo var_inf(var_scan);
-  //        var_inf.var_id=var_num;
-  //        var_inf.time_dim=time_dim;
-  //        // var_inf.time_dimi=-1;  // apparently....
-  //        // var_inf.cell_dimi=-1;  // this
-  //        // var_inf.layer_dimi=-1; // does need to be done...
-  //        // var_inf.node_dimi=-1;  // constructor not really doing it's job?
-  //    
-  //        // these will shortly be moved to a shared mesh object
-  //        var_inf.layer_dim=layer_dim;
-  //        var_inf.cell_dim=cell_dim;
-  //        var_inf.node_dim=node_dim;
-  //        var_inf.ncid=ncid;
-  //        for( int d=0;d<ndim;d++) {
+
+
+  // Loop through variables in file, trying to match them to grids
+  // and register with metadata
+  int nvars;
+  if ( nc_inq_nvars(ncid,&nvars) ) {
+    debug1 << "Failed. How could nc_inq_nvars fail??" << endl;
+    return;
+  }
+
+  debug1 << "UGRID: Scanning variable definitions" << endl;
+
+  char var_scan[NC_MAX_NAME];
+  for(int var_num=0;var_num<nvars;var_num++) {
+    if ( nc_inq_varname(ncid,var_num,var_scan) ) {
+      debug1 << "Failed to read name of variable at index " << var_num << endl;
+      continue;
+    }
+
+    debug1 << "Variable: "<<var_scan << " [" << var_num << "]" <<endl;
+
+    // read dimensions - if it has either cell/node and a layer dimension, assign to
+    // 3D mesh.
+    // if just cell/node, put it on the 2d mesh.
+    
+    int dims[6]; // who would have more than 6 dimensions??
+    int ndim;
+
+    if( nc_inq_varndims(ncid,var_num,&ndim) || 
+        nc_inq_vardimid(ncid,var_num,dims) ) {
+      debug1 << "Failed.  How did that happen?" << endl;
+      continue;
+    }
+    int extra_dims=0;
+
+    VarInfo var_inf(var_scan);
+    var_inf.var_id=var_num;
+    var_inf.time_dim=time_dim;
+
+    // used to have code here to *_dimi=-1 
+
+    // // these will shortly be moved to a shared mesh object
+    //        var_inf.layer_dim=layer_dim;
+    //        var_inf.cell_dim=cell_dim;
+    //        var_inf.node_dim=node_dim;
+    
+    var_inf.ncid=ncid;
+    for( int d=0;d<ndim;d++) {
+      // HERE:
+      //  cell dimensions we can compare against existing meshes
+      //  Take sa1 as an example.  dimensions are time, nFlowElem, laydim
+      //  tricky...
+      //  1. Mesh2D claims that nNetElem is the face dimension, but the variables
+      //     themselves claim nFlowElem as the face dimension.
+      //     appears we have to settle for some DFM-specific kludge.  I don't
+      //     see any way that one could simply intuit that nFlowElem and nNetElem
+      //     are the same.
+      //  2. laydim: there is only one variable which has only laydim.
+      //     it's a vertical coordinate, since it has a postive=up attribute
+      //     will be a little annoying to deal with, since it is ocean_sigma_coordinate
+
+      // approach: 
+      //  find the right place to slip in a kludge with cell naming
+      //  scan variables to get a list of vertical coordinates?
+      //  vertical coordinates will end up being another class, probably, since
+      //  they have to deal with sigma coordinates and all that.  so probably makes sense
+      //  to scan and collect coordinate variables with positive=up or positive=down (and/or
+      //  recognizable standard_names.)
+      
+      
   //          if ( dims[d] == cell_dim )
   //            var_inf.cell_dimi=d;
   //          else if (dims[d] == layer_dim )
@@ -627,13 +639,8 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
   //            var_inf.node_dimi=d;
   //          else
   //            extra_dims++;
-  //        }
-  //        var_inf.mesh_name=var_mesh(var_scan);
-  //        if ( var_inf.mesh_name != ugrid_mesh ) {
-  //          if ( var_inf.mesh_name != "" ) 
-  //            debug1 << "Found another ugrid mesh.  Not ready for that." << endl;
-  //          continue;
-  //        }
+    }
+    var_inf.mesh_name=var_mesh2d(var_scan);
   //    
   //        if ( extra_dims>0 ) {
   //          debug1 << "Variable " << var_scan << " has extra dimensions.  Not ready..." << endl;
@@ -687,7 +694,6 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
   //        }
   //        var_table[var_scan] = var_inf;
   //      }
-  //    }
   
   //
   // CODE TO ADD A VECTOR VARIABLE

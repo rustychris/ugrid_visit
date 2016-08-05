@@ -163,8 +163,8 @@ protected:
   // layer is the fastest changing index
   float *read_cell_z_full(std::string,int);
 
-  std::string var_mesh(std::string);
-  std::string var_mesh(int);
+  std::string var_mesh2d(std::string);
+  std::string var_mesh2d(int);
 
   void activateTimestate(int);
   // various geometry-related data specific to the active timestate
