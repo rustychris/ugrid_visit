@@ -50,21 +50,30 @@
 #include <map>
 
 #define MAX_SIDES 50
+#define MAX_DIMS 6
 
-
+// corresponds 1:1 (I think) with meshes in the eyes of visit.  
+// so whether a variable is on the nodes or cells is up to the variable.
 class MeshInfo {
 public:
   std::string name;
   int ncid,varid;
+  std::vector<int> cell_kmin,cell_kmax;
 
+  // dimension ids - set to -1 if this mesh doesn't have those
+  // dimensions
   int node_dim, cell_dim, layer_dim;
-  int node_x_var,node_y_var;
+  int node_x_var,node_y_var, layer_z_var;
   size_t n_nodes, n_cells, n_layers;
 
-  MeshInfo(int ncid,int varid);
-  MeshInfo() {ncid=-1 ; varid=-1; };
+  MeshInfo(int ncid,int varid,int z_var=-1);
+  MeshInfo() {ncid=-1 ; varid=-1; layer_z_var=-1; };
   vtkPoints *GetNodes(void);
   vtkDataSet *GetMesh(int timestate);
+  
+  vtkUnstructuredGrid *GetMesh2D(int timestate);
+
+  vtkUnstructuredGrid *ExtrudeTo3D(int timestate,vtkUnstructuredGrid *surface);
 };
 
 class VarInfo {
@@ -72,9 +81,12 @@ public:
   std::string name;
   std::string mesh_name;
   std::vector<std::string> spatial_dim_names;
+  int ndims;
+  int dims[MAX_DIMS];
 
   // these are -1 if not present, and otherwise
   // give where the respective dimension falls in the variable definition.
+  // node_dimi vs. cell_dimi control the staggering of the variable.
   int time_dimi,cell_dimi,layer_dimi,node_dimi;
   // cell, layer, node are stored in a mesh object - shared among variables
   // which live on the same grid.  time_dim is trickier - for a static grid,
@@ -88,6 +100,7 @@ public:
   void init(void);
   
   float *read_cell_at_time(int,MeshInfo &);
+  float *read_node_at_time(int,MeshInfo &);
   float *read_cell_z_at_time(int,MeshInfo &);
 };
 
@@ -109,22 +122,14 @@ class avtUGRIDFileFormat : public avtMTSDFileFormat
 
   virtual ~avtUGRIDFileFormat();
 
-    //
-    // This is used to return unconvention data -- ranging from material
-    // information to information about block connectivity.
-    //
-    // virtual void      *GetAuxiliaryData(const char *var, int timestep, 
-    //                                     const char *type, void *args, 
-    //                                     DestructorFunction &);
-    //
-
-    //
-    // If you know the times and cycle numbers, overload this function.
-    // Otherwise, VisIt will make up some reasonable ones for you.
-    //
-    // virtual void        GetCycles(std::vector<int> &);
-    // virtual void        GetTimes(std::vector<double> &);
-    //
+  //
+  // This is used to return unconvention data -- ranging from material
+  // information to information about block connectivity.
+  //
+  // virtual void      *GetAuxiliaryData(const char *var, int timestep, 
+  //                                     const char *type, void *args, 
+  //                                     DestructorFunction &);
+  //
 
   virtual int            GetNTimesteps(void);
   virtual void           GetTimes(std::vector<double> &);
@@ -147,8 +152,8 @@ protected:
   virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
 
   int ncid; // handle for netcdf file
-  int time_dim; // ,node_dim,cell_dim,layer_dim;
-  int time_var; // , mesh_var;
+  int time_dim; // some variables/meshes may have a different time - that's not tested, tho.
+  int time_var; 
   // int node_x_var,node_y_var;
   std::string default_ugrid_mesh;
   std::map<std::string,VarInfo> var_table;
@@ -159,6 +164,7 @@ protected:
 
   // map 3D cell ids to real cells, because cells that are
   // underground are not output.
+  // probably this needs to move to mesh
   std::map<int,int> full_cell2valid;
 
   // netcdf helpers:
@@ -176,6 +182,9 @@ protected:
   int *cell_kmin;
   int *cell_kmax;
   int ncells_3d;
+
+  int vertical_coordinate_for_dimension(int dim); 
+  std::string create_3d_mesh(std::string mesh2d,int z_dim,int z_var);
 
   vtkDataArray *GetVar3D(int, VarInfo &);
   vtkDataArray *GetVar2D(int, VarInfo &);

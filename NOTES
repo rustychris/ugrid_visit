@@ -29,3 +29,4 @@ But segfaults one the 2D grid.
  solves the seg fault.  Now displays the 2D grid!
 
 
+NetNode_z should be working, but isn't...
