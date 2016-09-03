@@ -267,35 +267,6 @@ string avtUGRIDFileFormat::var_mesh(std::string varname) {
 string avtUGRIDFileFormat::var_mesh(int varid) {
   // any reason not to use this same convenience util?
   return get_att_as_string(ncid,varid,"mesh");
-
-  // size_t mesh_name_len;
-  // if ( nc_inq_attlen(ncid,varid,"mesh",&mesh_name_len) ) {
-  //   // debug1 << "Failed to get length of mesh attribute" << endl;
-  //   return "";
-  // }
-  // 
-  // char *mesh_name;
-  // char *buff=new char[mesh_name_len+1];
-  // // wasn't working with nc_get_att_string...
-  // // oddly, it still fails sometimes.  what gives?
-  // if( ! nc_get_att_text(ncid,varid,"mesh",buff) ) {
-  //   buff[mesh_name_len]='\0';
-  //   mesh_name=buff;
-  // } else {
-  //   debug1 << "Failed to find mesh attribute on variable" << endl;
-  //   
-  //   // not sure why, but maybe trying the other way?
-  //   if ( nc_get_att_string(ncid,varid,"mesh",&mesh_name) ) {
-  //     debug1 << " even with nc_get_att_string, failed to find mesh attribute!" << endl;
-  //     return "";
-  //   } 
-  //   debug1 << "Weird - nc_get_att_text failed, but nc_get_att_string worked" << endl;
-  // }
-  // string result(mesh_name);
-  // delete[] buff;
-  // debug1 << " Read mesh='" << result << "' for varid=" << varid << endl;
-  // 
-  // return result;
 }
 
 // ****************************************************************************
@@ -1317,10 +1288,6 @@ avtUGRIDFileFormat::GetVectorVar(int timestate, const char *varname)
     //
 }
 
-
-// FlowElem_bl now shows up
-// some weird stuff in eta near the end of the run -
-// probably best to wait and compare with a more up to date run.
 
 // things to fix in the netcdf: 
 //  add mesh attribute to more variables - like _zcc
