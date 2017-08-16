@@ -62,7 +62,7 @@ public:
   std::string name;
 
   // formula terms in case of sigma layers:
-  std::string sigma_eta,sigma_bedlevel;
+  std::string sigma_sigma,sigma_eta,sigma_bedlevel;
 
   int ncid,varid;
   int active_timestate;
@@ -86,6 +86,8 @@ public:
   vtkUnstructuredGrid *ExtrudeTo3D(int timestate,vtkUnstructuredGrid *surface);
 
   void activateTimestate(int);
+
+  vtkDataArray *ZoneToNode2D(vtkDataArray *,vtkUnstructuredGrid *);
 };
 
 class VarInfo {

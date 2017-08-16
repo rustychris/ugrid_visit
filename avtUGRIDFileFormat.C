@@ -47,7 +47,7 @@
 #include <DebugStream.h>
 
 #include <string>
-#include <algorithm> // sort
+#include <algorithm> // sort, transform
 #include <vector>
 
 #include <vtkFloatArray.h>
@@ -57,6 +57,8 @@
 #include <vtkPoints.h>
 #include <vtkCellType.h>
 #include <vtkCellArray.h>
+#include <vtkCellData.h>
+#include <vtkPointData.h>
 #include <vtkSmartPointer.h>
 
 #include <avtDatabaseMetaData.h>
@@ -66,6 +68,9 @@
 
 #include <InvalidVariableException.h>
 
+#include <vtkCellDataToPointData.h>
+
+// who knew it was such a pain to do case-insensitive comparis
 
 using     std::string;
 
@@ -219,10 +224,13 @@ vtkDataSet *
 MeshInfo::GetMesh(int timestate) 
 {
   vtkUnstructuredGrid *surface=GetMesh2D(timestate);
-  
+
+  debug1 << "GetMesh..." << endl;
   if( layer_z_var < 0) {
     return surface;
   } else {
+    debug1 << "...ExtrudeTo3D" << endl;
+  
     vtkUnstructuredGrid *full=ExtrudeTo3D(timestate,surface);
     return full;
   }
@@ -422,6 +430,22 @@ MeshInfo::activateTimestate(int timestate) {
   active_timestate=timestate;
 }
 
+vtkDataArray *MeshInfo::ZoneToNode2D(vtkDataArray *zonal,vtkUnstructuredGrid *ds)
+{
+  // Taken from avtExpressionFilter.C, just the useful bits without
+  // mamby pamby error checking.
+  ds->GetCellData()->SetScalars(zonal);
+
+  vtkCellDataToPointData *cd2pd = vtkCellDataToPointData::New();
+  cd2pd->SetInputData(ds);
+  cd2pd->Update();
+  vtkDataSet *ds3 = cd2pd->GetOutput();
+  vtkDataArray *outv = ds3->GetPointData()->GetScalars();
+  outv->Register(NULL);
+  cd2pd->Delete();
+  // ds2->Delete(); // do this if we end up copying ds to ds2.
+  return outv;
+}
 
 vtkUnstructuredGrid *
 MeshInfo::ExtrudeTo3D(int timestate,
@@ -455,7 +479,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
     return NULL;
   }
 
-  int n_per_column=1+n_layers;
+  int n_per_column=n_layers; // Had been +1, but I don't think that's right
 
   // and the bounds variable? no guarantees that this exists.
   int bounds_var;
@@ -499,18 +523,32 @@ MeshInfo::ExtrudeTo3D(int timestate,
           i++;
           sigma_bedlevel=tokens[i];
         } else if ( tokens[i]=="sigma:" ) {
-          ;
+          i++;
+          sigma_sigma=tokens[i];
         } else {
           debug1 << "sigma formula terms not understood: " << tokens[i] << endl;
         }
       }
-      debug1 << "Sigma formula terms, eta is " << sigma_eta 
-             << " and bedlevel is " << sigma_bedlevel << endl;
+      debug1 << "Sigma formula terms, sigma is " << sigma_sigma 
+             << ", eta is " << sigma_eta 
+             << ", and bedlevel is " << sigma_bedlevel << endl;
       if ( (sigma_eta!="") && (sigma_bedlevel!="") ) {
         bedlevel=parent->GetVar(timestate,sigma_bedlevel.c_str());
         eta=parent->GetVar(timestate,sigma_eta.c_str());
         // HERE - need to deallocate those somehow
+        // sigma_sigma should aleady be loaded as layer_centers, based
+        // on layer_z_var
         debug1 << "Fetched values for sigma formula terms" << endl;
+
+        // going out on a limb here --
+        vtkDataArray *eta_node=ZoneToNode2D(eta,surface);
+        vtkDataArray *bed_node=ZoneToNode2D(bedlevel,surface);
+        eta->Delete();
+        bedlevel->Delete();
+        eta=eta_node;
+        bedlevel=bed_node;
+        // If that worked, then replace eta and bedlevel with these nodal
+        // arrays, and fix up the sigma calcs below.
       }
     }
   } else if (z_std_name=="ocean_zlevel_coordinate" ) {
@@ -548,11 +586,13 @@ MeshInfo::ExtrudeTo3D(int timestate,
       }
     } else {
       for(int k=0;k<n_per_column;k++) {
+        debug1 << "k = " << k << " of n_per_column = " << n_per_column << endl;
+        // Set the lower bound:
         if (k==0) {
           if( (z_std_name=="ocean_zlevel_coordinate") ) { 
             layer_bounds[2*k]=layer_centers[0] - 0.5*(layer_centers[1]-layer_centers[0]);
           } else {
-            layer_bounds[0]=0; // may need to adjust based on sign conventions.
+            layer_bounds[2*k]=0; // may need to adjust based on sign conventions.
           }
         } else {
           // copy from previous layer
@@ -576,14 +616,16 @@ MeshInfo::ExtrudeTo3D(int timestate,
 
   //----------- Create points ---------
   vtkPoints *all_points = vtkPoints::New();
-  all_points->SetNumberOfPoints( n_per_column*n_surf_points );
+  // Here, add +1 to n_per_column because 10 layers have 11 unique
+  // node elevations
+  all_points->SetNumberOfPoints( (n_per_column+1)*n_surf_points );
   float *ap_data = (float*)all_points->GetVoidPointer(0);
   double *surf_point;
   float *a_point;
-  
+
   for(int surf_point_id=0;surf_point_id<n_surf_points;surf_point_id++) {
     surf_point = surface->GetPoint(surf_point_id);
-    for(int k=0;k<n_per_column;k++){
+    for(int k=0;k<n_per_column+1;k++){
       // pointer to the point being defined
       a_point = ap_data + 3*(surf_point_id+k*n_surf_points);
       
@@ -596,6 +638,13 @@ MeshInfo::ExtrudeTo3D(int timestate,
         a_point[2] = layer_bounds[0];
       } else {
         a_point[2] = layer_bounds[2*(k-1)+1];
+      }
+
+      if ( (eta != NULL) && (bedlevel != NULL) ) {
+        double z_bed=bedlevel->GetComponent(surf_point_id,0);
+        double z_surf=eta->GetComponent(surf_point_id,0);
+
+        a_point[2]= a_point[2]*(z_surf - z_bed) + z_bed;
       }
 
       // come back and add in sigma coordinate calculation!
@@ -1080,9 +1129,11 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
     //        } else { 
     
     smd->meshName=mesh_table[var_inf.mesh_name].name;
-
+    
+    // maybe had old problems with mesh name, but now just report it once.
     debug1 << "PopulateDatabaseMetadata: var '" << var_inf.name << "' => mesh " 
-           << smd->meshName << " or is it " << var_inf.mesh_name << endl;
+           // << smd->meshName << " or is it " 
+           << var_inf.mesh_name << endl;
 
     if ( var_inf.cell_dimi>=0 ) 
       smd->centering=AVT_ZONECENT;
@@ -1096,6 +1147,10 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
 
     md->Add(smd);
     var_table[var_scan] = var_inf;
+    // This suggests that it goes into the table just fine, and copies out just fine.
+    // debug1 << "In var_table name is " << var_table[var_scan].name << endl;
+    // VarInfo tmp_vi=var_table[var_scan];
+    // debug1 << "Copied out, that's " << tmp_vi.name << endl;
   }
     
   // We should have all of the meshes now - any 2D meshes defined
@@ -1592,13 +1647,44 @@ avtUGRIDFileFormat::read_cell_z_full(std::string varname,int timestate)
 vtkDataArray *
 avtUGRIDFileFormat::GetVar(int timestate, const char *varname)
 {
-  VarInfo vi=var_table[varname];
+  std::string svarname(varname);
+  VarInfo vi=var_table[svarname];
+
+  if( vi.name == "" ) {
+    debug1 << "Case-mismatch in variable names?" << endl;
+    
+    // Iterate and look for case-insensitive matches
+    std::map<std::string,VarInfo>::iterator it = var_table.begin();
+ 
+    // Iterate over the map using Iterator till end.
+    while (it != var_table.end()) {
+      // Accessing KEY from element pointed by it.
+      std::string key=std::string(it->first);
+      std::transform(key.begin(),key.end(),key.begin(),::tolower);
+      std::transform(svarname.begin(),svarname.end(),svarname.begin(),::tolower);
+
+      if ( key==svarname ) {
+        debug1 << "Found case-insensitive match to " << varname << endl;
+        vi=it->second;
+        break;
+      }
+      it++; // move to next entry
+    }
+  }
+  
+  if( vi.name == "" ) {
+    debug1 << "BAD: appears that varname " << varname << " is not in the table" << endl;
+    return NULL;
+  }
 
   if ( vi.layer_dimi >= 0 ) {
     debug1 << "GetVar(" << timestate << "," << varname << ") => GetVar3D" << endl;
     return GetVar3D(timestate,vi);
   } else {
     debug1 << "GetVar(" << timestate << "," << varname << ") => GetVar2D" << endl;
+    // debug1 << "in GetVar, vi.name is " << vi.name << endl;
+    // // maybe need to make it into a string??
+    // debug1 << "but direct from table? " << var_table[varname].name << endl;
     return GetVar2D(timestate,vi);
   }
 }

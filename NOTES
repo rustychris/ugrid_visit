@@ -1,35 +1,18 @@
 DFM output (nc output, not the UGRID option)
 
-couldn't find mesh variable id FlowMesh
 
-=> add code to search for cf_role=='mesh_topology' DONE
-
-Old code depended on some key variables -
- vol_var: used to figure out cell_dim, layer_dim
-
-Hmm - probably have to shift to more variable driven. So we scan the variables,
-building up meshes as needed to support the variables encountered.
-
-Made some progress - in theory should be able to display the 2D mesh, but
-it's getting a segfault.
+NetNode_z is working, displayed in 2D grid
+FlowElemDomain: okay
+numlimdt properly shows up with time.
+s1 good (surface)
 
 
-Loads/displays the Mesh2D.nodes mesh okay.
-But segfaults one the 2D grid.
-
- - gets to the end of GetMesh - then no other info, and seg fault.
-
- - valgrind --trace-children=yes visit...
-   tons of tons of output.
-   possibly segfault from  vtkCellLinks
-
- one issue is that I've been assuming start_index=0, but it's a start_index=1 file.
- also should pay attention to fill value.
- Fixed - fill_value is already handled, and obeying start_index for face_node_connectivity
- solves the seg fault.  Now displays the 2D grid!
+Mesh2D.LayCoord_cc: doesn't include proper vertical.
 
 
-NetNode_z should be working, but isn't...
+
+sa1: No go.  Error is that zonal variable has 0 values, should have 33830.
+
 
 Dealing with sigma coordinates: 
   Does it make sense for 3D MeshInfo with sigma coordinates to retain a reference (?!)
@@ -38,3 +21,8 @@ Dealing with sigma coordinates:
   Can't really hold on to reference to variable.
   But MeshInfo (and VarInfo for that matter) could have a reference/pointer back to 
   avtUGRIDFileFormat
+
+
+TODO:
+
+ Make a vector variable out of the various component variables.
