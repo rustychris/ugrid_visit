@@ -73,8 +73,7 @@ public:
   // dimensions
   int node_dim, cell_dim, layer_dim;
   int node_x_var,node_y_var, layer_z_var;
-  size_t n_nodes, n_cells, n_layers;
-
+  size_t n_nodes, n_cells2d, n_layers, n_cells3d;
 
   MeshInfo(int ncid,int varid,int z_var=-1);
   MeshInfo() {ncid=-1 ; varid=-1; layer_z_var=-1; active_timestate=-1; parent=NULL; };
@@ -174,7 +173,6 @@ protected:
   std::map<std::string,MeshInfo> mesh_table;
 
   // basic dimensions 
-  // size_t n_nodes,n_cells,n_layers;
 
   // map 3D cell ids to real cells, because cells that are
   // underground are not output.

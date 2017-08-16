@@ -153,12 +153,17 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
     return;
   }
 
-  if ( nc_inq_dimlen(ncid,cell_dim,&n_cells) ) {
+  if ( nc_inq_dimlen(ncid,cell_dim,&n_cells2d) ) {
     debug1 << "Failed to read number of 2D cells" << endl;
     return;
   }
 
-  debug1 << "Read n_cells="<< n_cells << endl;
+  debug1 << "Read n_cells="<< n_cells2d << endl;
+
+  if(layer_z_var<0) {
+    n_cells3d=n_cells2d;
+    debug1 << "MeshInfo constructor: grid is 2D, so set n_cells3d=n_cells2d" << endl;
+  }
 
   string node_coords=get_att_as_string(ncid,varid,"node_coordinates");
   if( node_coords=="" ) return;
@@ -282,7 +287,7 @@ MeshInfo::GetMesh2D(int timestate)
   // assumes that face_node_var is [cells,nodes]
   nc_inq_dimlen(ncid,f_n_dims[1],&max_node_per_face);
   
-  int *faces=new int[n_cells*max_node_per_face];
+  int *faces=new int[n_cells2d*max_node_per_face];
 
   if ( nc_get_var_int(ncid, face_node_var, faces) ) {
     debug1 << "Failed to read face_node_var" << endl;
@@ -294,7 +299,7 @@ MeshInfo::GetMesh2D(int timestate)
   // Load as 2D, then optionally extrude to 3D
   vtkIdType *vertices=new vtkIdType[max_node_per_face];
     
-  for(int f=0;f<n_cells;f++) {
+  for(int f=0;f<n_cells2d;f++) {
     int n;
     for(n=0;n<max_node_per_face;n++) {
       if (faces[f*max_node_per_face+n] == face_node_fill ) 
@@ -388,13 +393,13 @@ MeshInfo::activateTimestate(int timestate) {
     return;
   }
 
-  // ncells_3d=0;
+  n_cells3d=0; // to be incremented below
   
-  if(cell_kmin.size() != n_cells )
-    cell_kmin.resize(n_cells,-1);
+  if(cell_kmin.size() != n_cells2d )
+    cell_kmin.resize(n_cells2d,-1);
 
-  if(cell_kmax.size() != n_cells ) 
-    cell_kmax.resize(n_cells,-1);
+  if(cell_kmax.size() != n_cells2d ) 
+    cell_kmax.resize(n_cells2d,-1);
 
   // for transcribed delwaq output, typically have
   // volumes, which can be used to filter out dry segments.
@@ -405,7 +410,7 @@ MeshInfo::activateTimestate(int timestate) {
 
   // float *volumes=read_cell_z_full("volume",timestate);
   // if ( !volumes ) return;
-  // for(int cell2d=0;cell2d<n_cells;cell2d++)  {
+  // for(int cell2d=0;cell2d<n_cells2d;cell2d++)  {
   //   // cell_kmin from first non-zero volume
   //   int k;
   //   for(k=0;
@@ -420,12 +425,14 @@ MeshInfo::activateTimestate(int timestate) {
   // }
 
   // new DFM code - sigma layers, so they're all full:
-  for(int i=0;i<n_cells;i++){
+  for(int i=0;i<n_cells2d;i++){
     cell_kmax[i]=n_layers;
     cell_kmin[i]=0;
+    n_cells3d += (cell_kmax[i] - cell_kmin[i]);
   }
   debug1 << "activateTimestate timestate=" << timestate 
-         << " cell_kmax[0]=" << cell_kmax[0] << endl;
+         << " cell_kmax[0]=" << cell_kmax[0] 
+         << " n_cells3d=" << n_cells3d << endl;
 
   active_timestate=timestate;
 }
@@ -646,15 +653,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
 
         a_point[2]= a_point[2]*(z_surf - z_bed) + z_bed;
       }
-
-      // come back and add in sigma coordinate calculation!
-      // tricky, because we'd like to keep the sigma layer interpretation, but it's 
-      // not well-define here, since the sigma coordinate formula terms are going to 
-      // have the same staggering as the cell centers.  so it's going to look like
-      // z-levels.
-      // so probably this has to switch to each water column getting its own
-      // points.
-      // HERE
     }
   }
 
@@ -702,7 +700,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
   int real_cell_id=0;
      
   for(int surf_cell_id=0 ;
-      surf_cell_id<n_cells ;
+      surf_cell_id<n_cells2d ;
       surf_cell_id++ ) {
     surface->GetCellPoints(surf_cell_id,
                            surf_cell_npoints,surf_cell_point_ids);
@@ -780,7 +778,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
       // as long as cell_kmin,cell_kmax are correct, there's not a compelling
       // reason to additionally store this mapping, afaict.
 
-      // int expected_id = surf_cell_id + k*n_cells;
+      // int expected_id = surf_cell_id + k*n_cells2d;
       // full_cell2valid[ expected_id ] = real_cell_id;
       // real_cell_id++;
     }
@@ -800,8 +798,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
   delete[] layer_bounds;
   return full_mesh;
 }
-
-
 
 
 //////////---- VarInfo ----//////////
@@ -1107,26 +1103,6 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
       smd->hasUnits=true;
       smd->units=units;
     }
-
-    // HERE: not yet into 3D...
-    //        if ( var_inf.layer_dimi>=0 ) {
-    //          smd->meshName=var_inf.mesh_name+".3d";
-    //          if ( var_inf.cell_dimi>=0 ) {
-    //            smd->centering=AVT_ZONECENT;
-    //            md->Add(smd);
-    //            // AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_ZONECENT);
-    //          } else if( var_inf.node_dimi>=0 ) {
-    //            // probably don't have any of these
-    //            smd->centering=AVT_NODECENT;
-    //            md->Add(smd);
-    //            // AddScalarVarToMetaData(md, var_scan, var_inf.mesh_name+".3d", AVT_NODECENT);
-    //          } else {
-    //            delete smd;
-    //            smd=NULL;
-    //            debug1 << "Will ignore " << var_scan << " b/c it doesn't have a horizontal dimension"
-    //                   << endl;
-    //          }
-    //        } else { 
     
     smd->meshName=mesh_table[var_inf.mesh_name].name;
     
@@ -1147,10 +1123,6 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
 
     md->Add(smd);
     var_table[var_scan] = var_inf;
-    // This suggests that it goes into the table just fine, and copies out just fine.
-    // debug1 << "In var_table name is " << var_table[var_scan].name << endl;
-    // VarInfo tmp_vi=var_table[var_scan];
-    // debug1 << "Copied out, that's " << tmp_vi.name << endl;
   }
     
   // We should have all of the meshes now - any 2D meshes defined
@@ -1170,11 +1142,6 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
     debug1 << "PopulateDatabaseMetadata: adding mesh " << it->second.name << endl;
     // AddMeshToMetaData(md,it->second.name+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
   }
-
-  
-  // variable centering:
-  // AVT_NODECENT, AVT_ZONECENT, AVT_UNKNOWN_CENT
-
 
   // CODE TO ADD A VECTOR VARIABLE
   //
@@ -1327,9 +1294,6 @@ avtUGRIDFileFormat::setMeshInfo(VarInfo &var_inf)
 
   debug1 << "End of setMeshInfo, and variable has mesh name " << var_inf.mesh_name << endl;
   return true;
-
-  // } else
-  // return false;
 }
 
 std::string
@@ -1499,7 +1463,7 @@ void avtUGRIDFileFormat::activateTimestate(int timestate) {
 
 float * VarInfo::read_cell_at_time(int timestate, MeshInfo &mesh)
 {
-  size_t n_cells = mesh.n_cells;
+  size_t n_cells = mesh.n_cells3d; // or should that be n_cells2d??
   debug1 << "read_cell_at_time: allocating " << n_cells << endl;
 
   float * result=new float[n_cells];
@@ -1692,14 +1656,37 @@ avtUGRIDFileFormat::GetVar(int timestate, const char *varname)
 vtkDataArray *
 avtUGRIDFileFormat::GetVar3D(int timestate,VarInfo &vi)
 { 
-  activateTimestate(timestate);
+  activateTimestate(timestate); // this updates n_cells3d if needed
+
+  MeshInfo &mesh=mesh_table[vi.mesh_name];
+
+  float *full;
 
   vtkFloatArray *rv = vtkFloatArray::New();
-  rv->SetNumberOfTuples(ncells_3d);
-  rv->SetNumberOfComponents(1);
 
-  // A little unsure of this part...
-  
+  debug1 << "GetVar3D(" << timestate << "," << vi.name << ")" << endl;
+  debug1 << "GetVar3D: var.mesh_name is " << vi.mesh_name << endl;
+  debug1 << "GetVar3D: mesh is " << mesh.name << endl;
+
+  if ( vi.cell_dimi>=0 ) {
+    rv->SetNumberOfTuples(mesh.n_cells3d);
+    rv->SetNumberOfComponents(1);
+
+    debug1 << " allocating " << mesh.n_cells3d << endl;
+
+    full=vi.read_cell_z_at_time(timestate,mesh);
+    // almost certainly some quick shortcut for this.
+    for(int i=0;i<mesh.n_cells3d;i++) {
+      rv->SetTuple1(i,full[i]);
+    }
+  } else if ( vi.node_dimi>=0 ) {
+    debug1 << "Not ready for 3D node variables" << endl;
+    return NULL;
+  }
+
+  debug1 << "Done with GetVar3D for " << vi.name << endl;
+
+  // old reference cruft
   //     float *full=read_cell_z_full(vi.name,timestate);
   //     
   //     int i3d=0;
@@ -1724,17 +1711,17 @@ avtUGRIDFileFormat::GetVar2D(int timestate,VarInfo &vi)
 
   MeshInfo &mesh=mesh_table[vi.mesh_name];
 
-  debug1 << "GetVar2D(" << timestate << "," << vi.name << ") allocating " << mesh.n_cells << endl;
+  debug1 << "GetVar2D(" << timestate << "," << vi.name << ") allocating " << mesh.n_cells2d << endl;
   debug1 << "GetVar2D: var.mesh_name is " << vi.mesh_name << endl;
   debug1 << "GetVar2D: mesh is " << mesh.name << endl;
 
   if ( vi.cell_dimi>=0 ) {
-    rv->SetNumberOfTuples(mesh.n_cells);
+    rv->SetNumberOfTuples(mesh.n_cells2d);
     rv->SetNumberOfComponents(1);
 
     full=vi.read_cell_at_time(timestate,mesh);
 
-    for(int i=0;i<mesh.n_cells;i++) {
+    for(int i=0;i<mesh.n_cells2d;i++) {
       rv->SetTuple1(i,full[i]);
     }
   } else if ( vi.node_dimi>=0 ) {
