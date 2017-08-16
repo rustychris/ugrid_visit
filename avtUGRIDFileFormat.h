@@ -52,13 +52,22 @@
 #define MAX_SIDES 50
 #define MAX_DIMS 6
 
+// forward declarations:
+class avtUGRIDFileFormat;
+
 // corresponds 1:1 (I think) with meshes in the eyes of visit.  
 // so whether a variable is on the nodes or cells is up to the variable.
 class MeshInfo {
 public:
   std::string name;
+
+  // formula terms in case of sigma layers:
+  std::string sigma_eta,sigma_bedlevel;
+
   int ncid,varid;
+  int active_timestate;
   std::vector<int> cell_kmin,cell_kmax;
+  avtUGRIDFileFormat *parent;
 
   // dimension ids - set to -1 if this mesh doesn't have those
   // dimensions
@@ -66,14 +75,17 @@ public:
   int node_x_var,node_y_var, layer_z_var;
   size_t n_nodes, n_cells, n_layers;
 
+
   MeshInfo(int ncid,int varid,int z_var=-1);
-  MeshInfo() {ncid=-1 ; varid=-1; layer_z_var=-1; };
+  MeshInfo() {ncid=-1 ; varid=-1; layer_z_var=-1; active_timestate=-1; parent=NULL; };
   vtkPoints *GetNodes(void);
   vtkDataSet *GetMesh(int timestate);
   
   vtkUnstructuredGrid *GetMesh2D(int timestate);
 
   vtkUnstructuredGrid *ExtrudeTo3D(int timestate,vtkUnstructuredGrid *surface);
+
+  void activateTimestate(int);
 };
 
 class VarInfo {

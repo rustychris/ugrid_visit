@@ -103,6 +103,24 @@ string get_att_as_string(int ncid,int varid,const char *att_name) {
 }
 
 
+std::vector<std::string> split(const std::string src, char c = ' ')
+{
+  const char *str=src.c_str();
+
+  std::vector<std::string> result;
+
+  do {
+    const char *begin = str;
+
+    while(*str != c && *str)
+      str++;
+    
+    result.push_back(string(begin, str));
+  } while (0 != *str++);
+
+  return result;
+}
+
 //////////---- MeshInfo ----//////////
 
 MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
@@ -112,6 +130,7 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
   ncid=_ncid;
   varid=mesh_var;
   layer_z_var=z_var;
+  active_timestate=-1;
 
   nc_inq_varname(ncid,varid,var_name);
   if ( z_var < 0 ) {
@@ -280,18 +299,18 @@ MeshInfo::GetMesh2D(int timestate)
     // This was failing on ERROR: bad cell type -- what fixed that?
     switch ( n ) {
     case 3:
-      if ( f==0 ) {
-        debug1 << "UGRID:GetMesh: inserting triangle cell, vertices=" 
-               << vertices[0] << " " << vertices[1] << " " << vertices[2] << endl;
-      }
+      // if ( f==0 ) {
+      //   debug1 << "UGRID:GetMesh: inserting triangle cell, vertices=" 
+      //          << vertices[0] << " " << vertices[1] << " " << vertices[2] << endl;
+      // }
       mesh->InsertNextCell(VTK_TRIANGLE,n,vertices);
       break;
     case 4: 
       mesh->InsertNextCell(VTK_QUAD,n,vertices);
-      debug1 << "UGRID: Trying to insert VTK_QUAD" << endl;
+      // debug1 << "UGRID: Trying to insert VTK_QUAD" << endl;
       break;
     default:
-      debug1 << "UGRID: Trying to insert VTK_POLYGON" << endl;
+      // debug1 << "UGRID: Trying to insert VTK_POLYGON" << endl;
       mesh->InsertNextCell(VTK_POLYGON,n,vertices);
       break;
     }
@@ -349,21 +368,35 @@ insertNPrism(vtkUnstructuredGrid *full_mesh,
 }
 
 void
-MeshInfo::activeTimestate(int timestate) {
-  HERE
+MeshInfo::activateTimestate(int timestate) {
+  // get some 3D mesh info for a given time step
+
+  if ( (active_timestate == timestate) || 
+       (layer_dim<0) ) 
+    return;
+
+  if ( cell_dim < 0 ) {
+    debug1 << "cell_dim not set - don't know how to set timestate for 3D, nodal field" << endl;
+    return;
+  }
+
   // ncells_3d=0;
-  // 
-  // if(!cell_kmin) {
-  //   cell_kmin = new int[n_cells];
-  // }
-  // if(!cell_kmax) {
-  //   cell_kmax = new int[n_cells];
-  // }
-  // 
-  // // use the volumes variable to figure out 
+  
+  if(cell_kmin.size() != n_cells )
+    cell_kmin.resize(n_cells,-1);
+
+  if(cell_kmax.size() != n_cells ) 
+    cell_kmax.resize(n_cells,-1);
+
+  // for transcribed delwaq output, typically have
+  // volumes, which can be used to filter out dry segments.
+  // for DFM output, it's probably sigma level and we can assume
+  // all layers are active?
+
+  // older DELWAQ code, need to figure out how to support both.
+
   // float *volumes=read_cell_z_full("volume",timestate);
   // if ( !volumes ) return;
-  // 
   // for(int cell2d=0;cell2d<n_cells;cell2d++)  {
   //   // cell_kmin from first non-zero volume
   //   int k;
@@ -377,8 +410,16 @@ MeshInfo::activeTimestate(int timestate) {
   //   cell_kmax[cell2d]=k;
   //   ncells_3d += (cell_kmax[cell2d] - cell_kmin[cell2d]);
   // }
-  // 
-  // active_timestate=timestate;
+
+  // new DFM code - sigma layers, so they're all full:
+  for(int i=0;i<n_cells;i++){
+    cell_kmax[i]=n_layers;
+    cell_kmin[i]=0;
+  }
+  debug1 << "activateTimestate timestate=" << timestate 
+         << " cell_kmax[0]=" << cell_kmax[0] << endl;
+
+  active_timestate=timestate;
 }
 
 
@@ -386,8 +427,12 @@ vtkUnstructuredGrid *
 MeshInfo::ExtrudeTo3D(int timestate,
                       vtkUnstructuredGrid *surface)
 {
+  vtkDataArray *bedlevel=NULL;
+  vtkDataArray *eta=NULL;
+
   ////// Now basically extrude the surface mesh to prisms
   // bounded by the cell_divisions elevations 
+  activateTimestate(timestate);
 
   // the new points 
   // copy the z=0 points from the flat surface, and then repeat
@@ -401,8 +446,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
   //   with dimensions nFlowMesh_layers,2, giving top and bottom elevation
   //   of the z-layers.
   
-  size_t n_layers;
- 
   // so far we only support layer_z_var having a single dimension.
 
   int layer_var_ndim=-1;
@@ -412,10 +455,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
     return NULL;
   }
 
-  if( nc_inq_dimlen(ncid,layer_dim,&n_layers) ) {
-    debug1 << "failed to find layer dimension" << endl;
-    return NULL;
-  }
   int n_per_column=1+n_layers;
 
   // and the bounds variable? no guarantees that this exists.
@@ -442,6 +481,38 @@ MeshInfo::ExtrudeTo3D(int timestate,
   
   if ( z_std_name=="ocean_sigma_coordinate" ) {
     debug1<< "Vertical coordinate indicates sigma coordinates" << endl;
+
+    // which variables define the layers?
+    std::string formula=get_att_as_string(ncid,layer_z_var,"formula_terms");
+    if ( formula=="" ) {
+      debug1 << "Sigma coordinate, but no formula_terms" << endl;
+      sigma_eta=sigma_bedlevel="";
+    } else {
+      // something like:
+      // LayCoord_cc:formula_terms = "sigma: LayCoord_cc eta: s1 bedlevel: flowelem_bl" ;
+      std::vector<std::string> tokens = split(formula);
+      for (int i=0;i<tokens.size();i++) {
+        if( tokens[i] == "eta:" ) {
+          i++;
+          sigma_eta=tokens[i];
+        } else if ( tokens[i]=="bedlevel:" ) {
+          i++;
+          sigma_bedlevel=tokens[i];
+        } else if ( tokens[i]=="sigma:" ) {
+          ;
+        } else {
+          debug1 << "sigma formula terms not understood: " << tokens[i] << endl;
+        }
+      }
+      debug1 << "Sigma formula terms, eta is " << sigma_eta 
+             << " and bedlevel is " << sigma_bedlevel << endl;
+      if ( (sigma_eta!="") && (sigma_bedlevel!="") ) {
+        bedlevel=parent->GetVar(timestate,sigma_bedlevel.c_str());
+        eta=parent->GetVar(timestate,sigma_eta.c_str());
+        // HERE - need to deallocate those somehow
+        debug1 << "Fetched values for sigma formula terms" << endl;
+      }
+    }
   } else if (z_std_name=="ocean_zlevel_coordinate" ) {
     debug1<< "Vertical coordinate indicates z-level coordinates" << endl;
   }
@@ -527,10 +598,19 @@ MeshInfo::ExtrudeTo3D(int timestate,
         a_point[2] = layer_bounds[2*(k-1)+1];
       }
 
-      // HERE - come back and add in sigma coordinate calculation!
+      // come back and add in sigma coordinate calculation!
+      // tricky, because we'd like to keep the sigma layer interpretation, but it's 
+      // not well-define here, since the sigma coordinate formula terms are going to 
+      // have the same staggering as the cell centers.  so it's going to look like
+      // z-levels.
+      // so probably this has to switch to each water column getting its own
+      // points.
+      // HERE
     }
   }
-  
+
+  debug1 << "Done creating 3D points" << endl;
+
   vtkUnstructuredGrid *full_mesh = vtkUnstructuredGrid::New();
    
   // Copy the cell structure, extruding through depth
@@ -585,7 +665,12 @@ MeshInfo::ExtrudeTo3D(int timestate,
    
     int k; // index into vertical cells
 
-    // HERE - where do cell_kmin / kmax come from?
+    if( surf_cell_id == 0 ) {
+      debug1 << " surf_cell_id=" << surf_cell_id
+             << " cell_kmin=" << cell_kmin[surf_cell_id] 
+             << " cell_kmax=" << cell_kmax[surf_cell_id] 
+             << endl;
+    }
     for(k=cell_kmin[surf_cell_id];
         k<cell_kmax[surf_cell_id];
         k++) {
@@ -643,11 +728,12 @@ MeshInfo::ExtrudeTo3D(int timestate,
       // update the mapping of cell ids:
       // the order of the data file is still a bit unclear, so hopefully
       // this is the same as in the data file...
-      int expected_id = surf_cell_id + k*n_cells;
-   
-      full_cell2valid[ expected_id ] = real_cell_id;
-        
-      real_cell_id++;
+      // as long as cell_kmin,cell_kmax are correct, there's not a compelling
+      // reason to additionally store this mapping, afaict.
+
+      // int expected_id = surf_cell_id + k*n_cells;
+      // full_cell2valid[ expected_id ] = real_cell_id;
+      // real_cell_id++;
     }
   }
   debug1 << "Done constructing 3D cells" << endl;
@@ -755,6 +841,7 @@ avtUGRIDFileFormat::avtUGRIDFileFormat(const char *filename)
       if(default_ugrid_mesh=="") {
         default_ugrid_mesh=minfo.name;
       }
+      minfo.parent=this;
       mesh_table[minfo.name]=minfo;
     }
   }
@@ -1203,8 +1290,15 @@ avtUGRIDFileFormat::create_3d_mesh(std::string mesh2d,int z_dim,int z_var) {
 
   mesh_table[result] = MeshInfo(ncid,mesh_table[mesh2d].varid,z_var);
   MeshInfo &mesh3d=mesh_table[result];
+  mesh3d.parent=this;
   mesh3d.layer_dim = z_dim;
   mesh3d.layer_z_var = z_var;
+
+  if( nc_inq_dimlen(ncid,z_dim,&(mesh3d.n_layers)) ) {
+    debug1 << "failed to find layer dimension.  will punt with n_layers=1" << endl;
+    mesh3d.n_layers=1;
+  }
+
   return result;
 }
 

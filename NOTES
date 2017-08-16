@@ -30,3 +30,11 @@ But segfaults one the 2D grid.
 
 
 NetNode_z should be working, but isn't...
+
+Dealing with sigma coordinates: 
+  Does it make sense for 3D MeshInfo with sigma coordinates to retain a reference (?!)
+  to eta and bedlevel VarInfo?
+
+  Can't really hold on to reference to variable.
+  But MeshInfo (and VarInfo for that matter) could have a reference/pointer back to 
+  avtUGRIDFileFormat
