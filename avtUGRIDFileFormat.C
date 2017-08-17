@@ -1799,10 +1799,3 @@ avtUGRIDFileFormat::GetVectorVar(int timestate, const char *varname)
 }
 
 
-// FlowElem_bl now shows up
-// some weird stuff in eta near the end of the run -
-// probably best to wait and compare with a more up to date run.
-
-// things to fix in the netcdf: 
-//  add mesh attribute to more variables - like _zcc
-//  need to figure out proper way of dealing with volume, vertical coordinates, etc.
