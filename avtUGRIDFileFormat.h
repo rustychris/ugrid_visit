@@ -52,9 +52,11 @@
 
 #define MAX_SIDES 50
 #define MAX_DIMS 6
+#define MAX_SUBDOMAINS 256
 
 // forward declarations:
 class avtUGRIDFileFormat;
+class avtUGRIDSingle;
 
 // corresponds 1:1 (I think) with meshes in the eyes of visit.  
 // so whether a variable is on the nodes or cells is up to the variable.
@@ -68,7 +70,7 @@ public:
   int ncid,varid;
   int active_timestate;
   std::vector<int> cell_kmin,cell_kmax;
-  avtUGRIDFileFormat *parent;
+  avtUGRIDSingle *parent;
 
   // dimension ids - set to -1 if this mesh doesn't have those
   // dimensions
@@ -152,10 +154,13 @@ class avtUGRIDSingle : public avtMTSDFileFormat
   // vtkDataSet *ExtrudeTo3D(const std::string,int,vtkUnstructuredGrid *);
   vtkPoints *GetNodes(const std::string);
 
-protected:
+  void initialize_metadata(void);
+
   // DATA MEMBERS
 
   virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
+
+protected:
 
   int ncid; // handle for netcdf file
   int time_dim; // some variables/meshes may have a different time - that's not tested, tho.
@@ -230,17 +235,16 @@ protected:
 
   std::vector<avtUGRIDSingle*> domain_cache;
   std::vector<avtDatabaseMetaData*> metadata_cache;
+  std::vector<std::string> filenames;
+  int domain_count;
 
   avtUGRIDSingle *subdomain(int domain);
+  void populate_filenames(const char *);
 
   // I think this can be handled within the subdomains.
   // void activateTimestate(int);
   // various geometry-related data specific to the active timestate
   // int active_timestate;
-
-  int domain_count;
-
-  std::string filepath;
 };
 
 
