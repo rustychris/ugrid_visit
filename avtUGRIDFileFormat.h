@@ -86,6 +86,9 @@ public:
   vtkUnstructuredGrid *GetMesh2D(int timestate);
 
   vtkUnstructuredGrid *ExtrudeTo3D(int timestate,vtkUnstructuredGrid *surface);
+  void set_layer_bounds(std::string z_std_name,
+                        std::vector<float> &layer_bottom,
+                        std::vector<float> &layer_top);
 
   void activateTimestate(int);
 

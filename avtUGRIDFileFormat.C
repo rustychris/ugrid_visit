@@ -460,6 +460,116 @@ vtkDataArray *MeshInfo::ZoneToNode2D(vtkDataArray *zonal,vtkUnstructuredGrid *ds
   return outv;
 }
 
+/* set_layer_bounds
+ * based on UGRID layer coordinates and optional layer bounds,
+ * populate elevations for top/bottom coordinates.  does not 
+ * apply sigma transform.
+ */
+void
+MeshInfo::set_layer_bounds(std::string z_std_name,
+                           std::vector<float> &layer_bottom,
+                           std::vector<float> &layer_top) 
+{
+  // and the bounds variable? no guarantees that this exists.
+  int bounds_var;
+  string bounds_name=get_att_as_string(ncid,layer_z_var,"bounds");
+  if ( bounds_name == "" ) {
+    debug1 << "No bounds attribute" << endl;
+    bounds_var=-1;
+  } else {
+    if( nc_inq_varid(ncid,bounds_name.c_str(),&bounds_var) ) {
+      debug1 << "Failed to find bounds variable" << endl;
+      bounds_var=-1;
+    }
+    debug5 << "Found vertical bounds variable" << endl;
+  }
+
+  // for now, assume one set of z coordinates for the whole grid
+  // (for z layers, we're ignoring partial layers)
+  // this is already implicitly assumed by looking only for z coordinates with
+  // a single dimension.
+  layer_bottom.resize(n_layers);
+  layer_top.resize(n_layers);
+
+  if ( bounds_var>= 0) {
+    float *layer_bounds=new float[2*n_layers];
+  
+    if ( nc_get_var_float(ncid,bounds_var,layer_bounds) ) {
+      debug1 << "Failed to read layer bounds" << endl;
+      bounds_var=-1; // fall through to next section
+    }
+    for(int i=0;i<n_layers;i++) {
+      layer_bottom[i]=layer_bounds[2*i];
+      layer_top[i]=layer_bounds[2*i+1];
+    }
+    delete[] layer_bounds;
+  }
+  
+  if ( bounds_var<0 ) {
+    // read layer centers, extrapolate to layer bounds
+    float *layer_centers=new float[n_layers];
+
+    if ( nc_get_var_float(ncid,layer_z_var,layer_centers) ) {
+      debug1 << "Failed to read layer_z_var" << endl;
+      debug1 << "Fabricating!" << endl;
+      for(int i=0;i<n_layers;i++) {
+        layer_centers[i]=(float)(i+0.5) / (float)n_layers;
+      }
+    }
+
+    // Special DFlowFM workaround - layer coordinates are
+    // incorrect after first output, at least in r50237
+    if( fabs(layer_centers[0]) > 100000 ) {
+      debug1 << "layer coordinate looks corrupted.  Will fabricate." << endl;
+      for(int i=0;i<n_layers;i++) {
+        layer_centers[i]=(float)(i+0.5) / (float)n_layers;
+      }
+    }
+
+    if ( n_layers==1 ) {
+      if ( z_std_name=="ocean_zlevel_coordinate" ) {
+        // total punt - could get smarter and look for 
+        // eta and bedlevel.
+        layer_bottom[0]=layer_centers[0]-0.5;
+        layer_top[0]=layer_centers[0]+0.5;
+      } else {
+        // reasonable guess for sigma coordinates
+        layer_bottom[0]=0;
+        layer_top[0]=1;
+      }
+    } else {
+      for(int k=0;k<n_layers;k++) {
+        debug1 << "k = " << k << " of n_layers = " << n_layers << endl;
+        // Set the lower bound:
+        if (k==0) {
+          if( (z_std_name=="ocean_zlevel_coordinate") ) { 
+            layer_bottom[k]=layer_centers[0] - 0.5*(layer_centers[1]-layer_centers[0]);
+          } else {
+            layer_bottom[k]=0; // may need to adjust based on sign conventions.
+          }
+        } else {
+          // copy from previous layer
+          layer_bottom[k]=layer_top[k-1];
+        }
+
+        // and the top of the layer
+        if (k==n_layers-1) {
+          if( (z_std_name=="ocean_zlevel_coordinate") ) { 
+            layer_top[k]=layer_bottom[k] + (layer_centers[k]-layer_centers[k-1]);
+          } else {
+            layer_top[k]=1; // may need to adjust based on sign conventions.
+          }
+        } else {
+          layer_top[k]=0.5*(layer_centers[k]+layer_centers[k+1]);
+        }
+        debug1 << "Layer bounds: " << layer_bottom[k] << " to " << layer_top[k] << endl;
+      }
+    }
+    delete[] layer_centers;
+  }
+}
+
+
 vtkUnstructuredGrid *
 MeshInfo::ExtrudeTo3D(int timestate,
                       vtkUnstructuredGrid *surface)
@@ -490,24 +600,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
   if ( layer_var_ndim != 1 ) {
     debug1 << "Whoa - layer_var_ndim must be 1, but it was " << layer_var_ndim << endl;
     return NULL;
-  }
-
-  int n_per_column=n_layers; // Had been +1, but I don't think that's right
-
-  // and the bounds variable? no guarantees that this exists.
-  int bounds_var;
-  string bounds_name=get_att_as_string(ncid,layer_z_var,"bounds");
-  if ( bounds_name == "" ) {
-    debug1 << "No bounds attribute" << endl;
-    bounds_var=-1;
-  } else {
-    if( nc_inq_varid(ncid,bounds_name.c_str(),&bounds_var) ) {
-      debug1 << "Failed to find bounds variable" << endl;
-      return NULL;
-    }
-    debug1 << "Found vertical bounds variable" << endl;
-  }
-  
+  }  
 
   // z-coordinate or sigma terrain-following?
   std::string z_std_name=get_att_as_string(ncid,layer_z_var,"standard_name");
@@ -548,7 +641,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
       if ( (sigma_eta!="") && (sigma_bedlevel!="") ) {
         bedlevel=parent->GetVar(timestate,sigma_bedlevel.c_str());
         eta=parent->GetVar(timestate,sigma_eta.c_str());
-        // HERE - need to deallocate those somehow
         // sigma_sigma should aleady be loaded as layer_centers, based
         // on layer_z_var
         debug1 << "Fetched values for sigma formula terms" << endl;
@@ -560,8 +652,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
         bedlevel->Delete();
         eta=eta_node;
         bedlevel=bed_node;
-        // If that worked, then replace eta and bedlevel with these nodal
-        // arrays, and fix up the sigma calcs below.
+        // HERE - need to deallocate those somehow
       }
     }
   } else if (z_std_name=="ocean_zlevel_coordinate" ) {
@@ -569,76 +660,23 @@ MeshInfo::ExtrudeTo3D(int timestate,
   }
 
   //-----  Extract vertical coordinate bounds -----
-  //
-  // for now, assume one set of z coordinates for the whole grid
-  // (for z layers, we're ignoring partial layers)
-  // this is already implicitly assumed by looking only for z coordinates with
-  // a single dimension.
-  float *layer_bounds=new float[2*n_per_column];
-  if ( bounds_var>= 0) {
-    if ( nc_get_var_float(ncid,bounds_var,layer_bounds) ) {
-      debug1 << "Failed to read layer bounds" << endl;
-      return NULL;
-    }
-  } else {
-    float *layer_centers=new float[n_layers];
-    if ( nc_get_var_float(ncid,layer_z_var,layer_centers) ) {
-      debug1 << "Failed to read layer_z_var" << endl;
-    }
+  std::vector<float> layer_bottom;
+  std::vector<float> layer_top;
+  set_layer_bounds(z_std_name,layer_bottom,layer_top);
 
-    debug1 << "Fabricating bounds_var" << endl;
-    if ( n_layers==1 ) {
-      if ( z_std_name=="ocean_zlevel_coordinate" ) {
-        // total punt - not much to go on
-        layer_bounds[0]=layer_centers[0]-0.5;
-        layer_bounds[1]=layer_centers[0]+0.5;
-      } else {
-        // reasonable guess for sigma coordinates
-        layer_bounds[0]=0;
-        layer_bounds[1]=1;
-      }
-    } else {
-      for(int k=0;k<n_per_column;k++) {
-        debug1 << "k = " << k << " of n_per_column = " << n_per_column << endl;
-        // Set the lower bound:
-        if (k==0) {
-          if( (z_std_name=="ocean_zlevel_coordinate") ) { 
-            layer_bounds[2*k]=layer_centers[0] - 0.5*(layer_centers[1]-layer_centers[0]);
-          } else {
-            layer_bounds[2*k]=0; // may need to adjust based on sign conventions.
-          }
-        } else {
-          // copy from previous layer
-          layer_bounds[2*k]=layer_bounds[2*(k-1)+1];
-        }
-
-        if (k==n_per_column-1) {
-          if( (z_std_name=="ocean_zlevel_coordinate") ) { 
-            layer_bounds[2*k+1]=layer_bounds[2*k] + (layer_centers[k-1]-layer_centers[k-2]);
-          } else {
-            layer_bounds[2*k+1]=1; // may need to adjust based on sign conventions.
-          }
-        } else {
-          layer_bounds[2*k+1]=0.5*(layer_centers[k]+layer_centers[k+1]);
-        }
-        debug1 << "Layer bounds: " << layer_bounds[2*k] << " to " << layer_bounds[2*k+1] << endl;
-      }
-    }
-    delete[] layer_centers;
-  }
 
   //----------- Create points ---------
   vtkPoints *all_points = vtkPoints::New();
-  // Here, add +1 to n_per_column because 10 layers have 11 unique
+  // Here, add +1 to n_layers because 10 layers have 11 unique
   // node elevations
-  all_points->SetNumberOfPoints( (n_per_column+1)*n_surf_points );
+  all_points->SetNumberOfPoints( (n_layers+1)*n_surf_points );
   float *ap_data = (float*)all_points->GetVoidPointer(0);
   double *surf_point;
   float *a_point;
 
   for(int surf_point_id=0;surf_point_id<n_surf_points;surf_point_id++) {
     surf_point = surface->GetPoint(surf_point_id);
-    for(int k=0;k<n_per_column+1;k++){
+    for(int k=0;k<n_layers+1;k++){
       // pointer to the point being defined
       a_point = ap_data + 3*(surf_point_id+k*n_surf_points);
       
@@ -648,11 +686,12 @@ MeshInfo::ExtrudeTo3D(int timestate,
       // assumes that bounds are continuous - bottom of one cell same
       // as top of the next
       if(k==0) {
-        a_point[2] = layer_bounds[0];
+        a_point[2] = layer_bottom[0];
       } else {
-        a_point[2] = layer_bounds[2*(k-1)+1];
+        a_point[2] = layer_top[k-1];
       }
 
+      // apply the sigma transformation
       if ( (eta != NULL) && (bedlevel != NULL) ) {
         double z_bed=bedlevel->GetComponent(surf_point_id,0);
         double z_surf=eta->GetComponent(surf_point_id,0);
@@ -801,7 +840,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
   full_mesh->Register(NULL); // ???
   
   debug1 << "Return 3D mesh" << endl;
-  delete[] layer_bounds;
   return full_mesh;
 }
 
@@ -1251,7 +1289,7 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
     
     // read dimension name for some kludgy tests below
     if ( nc_inq_dimname(ncid,var_inf.dims[d],dim_name) ) {
-      debug1 << "Failed to read name of dimension" << endl;
+      debug1 << "  Failed to read name of dimension" << endl;
       return false;
     }
     bool found_dim_match=false;
@@ -1298,19 +1336,19 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
         continue;
       }
     }
-    debug1 << "Failed to find any sort of match for dimension "<< dim_name <<endl;
+    debug5 << "  Failed to find any sort of match for dimension "<< dim_name <<endl;
     return false;
   }
 
   // at this point, must have found a 2D mesh
   if ( var_inf.mesh_name=="" )  {
-    debug1 << "setMeshInfo(" << var_inf.name << "): no 2D grid identified" << endl;
+    debug1 << "  setMeshInfo(" << var_inf.name << "): no 2D grid identified" << endl;
     return false;
   }
   
   if ( z_var >= 0 ) {
-    debug1<<"Emerged, and variable appears to be 3D." << endl;
-    debug1<<"Current mesh name is " << var_inf.mesh_name << endl;
+    debug1<<"  Emerged, and variable appears to be 3D." << endl;
+    debug1<<"  Current mesh name is " << var_inf.mesh_name << endl;
     var_inf.mesh_name=create_3d_mesh(var_inf.mesh_name,
                                      var_inf.dims[var_inf.layer_dimi],
                                      z_var);
@@ -1899,6 +1937,7 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
 
   debug1 << "Looks like proc 0: " << basename << endl;
 
+  debug1 << "About to loop through candidate filenames" << endl;
   for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
     int file_idx=0;
     for(;file_idx<all_files.size();file_idx++) {
@@ -1915,8 +1954,8 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
           basename_sub.substr(pm_sub[1].rm_eo,std::string::npos) )
         continue;
 
-      debug1 << "Maybe " << basename_sub << endl;
-
+      debug5 << "Maybe " << basename_sub << endl;
+      
       std::string proc_str=std::string(basename_sub.c_str()+pm[1].rm_so,
                                        pm[1].rm_eo - pm[1].rm_so);
       int proc_num=atoi(basename_sub.substr(pm_sub[1].rm_so,
