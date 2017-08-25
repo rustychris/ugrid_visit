@@ -1,0 +1,28 @@
+DFM output (nc output, not the UGRID option)
+
+
+NetNode_z is working, displayed in 2D grid
+FlowElemDomain: okay
+numlimdt properly shows up with time.
+s1 good (surface)
+
+
+Mesh2D.LayCoord_cc: doesn't include proper vertical.
+
+
+
+sa1: No go.  Error is that zonal variable has 0 values, should have 33830.
+
+
+Dealing with sigma coordinates: 
+  Does it make sense for 3D MeshInfo with sigma coordinates to retain a reference (?!)
+  to eta and bedlevel VarInfo?
+
+  Can't really hold on to reference to variable.
+  But MeshInfo (and VarInfo for that matter) could have a reference/pointer back to 
+  avtUGRIDFileFormat
+
+
+TODO:
+
+ Make a vector variable out of the various component variables.
