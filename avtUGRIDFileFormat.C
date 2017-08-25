@@ -144,8 +144,9 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
   active_timestate=-1;
 
   nc_inq_varname(ncid,varid,var_name);
-  if ( z_var < 0 ) {
+  if ( layer_z_var < 0 ) {
     name=var_name;
+    layer_dim=-1;
   } else {
     nc_inq_varname(ncid,layer_z_var,zvar_name);
     name=std::string(var_name) + "." + std::string(zvar_name);
@@ -1217,7 +1218,8 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
 
     AddMeshToMetaData(md, it->second.name, mt, extents, nblocks, block_origin,
                       spatial_dimension, topological_dimension);
-    debug1 << "PopulateDatabaseMetadata: adding mesh " << it->second.name << endl;
+    debug1 << "PopulateDatabaseMetadata: adding mesh " << it->second.name
+           << " spatial_dimension=" << spatial_dimension << endl;
     // AddMeshToMetaData(md,it->second.name+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
   }
 
