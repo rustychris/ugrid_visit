@@ -6,9 +6,9 @@
 #export CXX=/usr/local/bin/g++-4.2
 
 #Linux
-BIN=$HOME/software/visit/bin
-export CC=gcc
-export CXX=g++
+BIN=$HOME/src/visit2_10_2.linux-x86_64/bin
+# export CC=gcc
+# export CXX=g++
 
 rm -r CMake* Makefile cmake_install.cmake
 
