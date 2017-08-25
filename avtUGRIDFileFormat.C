@@ -243,6 +243,10 @@ MeshInfo::GetMesh(int timestate)
     debug1 << "...ExtrudeTo3D" << endl;
   
     vtkUnstructuredGrid *full=ExtrudeTo3D(timestate,surface);
+    // without GetMesh2D calling mesh->Register(), this
+    // crashes.  But that was because it was being Deleted
+    // in multiple places.
+    surface->Delete(); // is this okay? seems to make it crash.
     return full;
   }
 }
@@ -257,6 +261,8 @@ MeshInfo::GetMesh2D(int timestate)
   mesh->SetPoints(points);
   points->Delete() ; // pretty sure this is correct...
   mesh->Allocate();
+  // maybe I shouldn't do this?
+  // mesh->Register(NULL); // returning a pointer which owns itself
 
   // read the node_face info, build up triangles/quads.
   debug1 << "GetMesh: ugrid mesh name " << name << endl;
@@ -445,18 +451,25 @@ MeshInfo::activateTimestate(int timestate) {
 
 vtkDataArray *MeshInfo::ZoneToNode2D(vtkDataArray *zonal,vtkUnstructuredGrid *ds)
 {
+  // This is leaking
   // Taken from avtExpressionFilter.C, just the useful bits without
   // mamby pamby error checking.
   ds->GetCellData()->SetScalars(zonal);
 
   vtkCellDataToPointData *cd2pd = vtkCellDataToPointData::New();
   cd2pd->SetInputData(ds);
+  // I think Update() is where the leak occurs, possibly leaking b/c
+  // I was calling outv->Register(NULL) below?
   cd2pd->Update();
   vtkDataSet *ds3 = cd2pd->GetOutput();
   vtkDataArray *outv = ds3->GetPointData()->GetScalars();
+  
+  // This appears to be correct, but note that the caller must 
+  // Delete() the returned data.
   outv->Register(NULL);
+
   cd2pd->Delete();
-  // ds2->Delete(); // do this if we end up copying ds to ds2.
+
   return outv;
 }
 
@@ -652,7 +665,6 @@ MeshInfo::ExtrudeTo3D(int timestate,
         bedlevel->Delete();
         eta=eta_node;
         bedlevel=bed_node;
-        // HERE - need to deallocate those somehow
       }
     }
   } else if (z_std_name=="ocean_zlevel_coordinate" ) {
@@ -833,11 +845,15 @@ MeshInfo::ExtrudeTo3D(int timestate,
   // hopefully it's okay to set the points here, *after* defining the cells
   full_mesh->SetPoints(all_points);
   all_points->Delete();
-  surface->Delete();
+  // surface->Delete(); // caller does this now.
    
-  // n_3d_cells = full_mesh->GetNumberOfCells();
-  
-  full_mesh->Register(NULL); // ???
+  // this causes a leak.
+  // full_mesh->Register(NULL); 
+
+  // this is the counterpart to outv->Register() call in ZoneToNode2D, and
+  // successfully cleans up the leak without introducing invalid reads
+  if(eta!=NULL) eta->Delete();
+  if(bedlevel!=NULL) bedlevel->Delete();
   
   debug1 << "Return 3D mesh" << endl;
   return full_mesh;
@@ -1557,7 +1573,7 @@ float * VarInfo::read_cell_at_time(int timestate, MeshInfo &mesh)
 float * VarInfo::read_node_at_time(int timestate, MeshInfo &mesh)
 {
   size_t n_nodes = mesh.n_nodes;
-  debug1 << "read_cell_at_time: allocating " << n_nodes << endl;
+  debug1 << "read_node_at_time: allocating " << n_nodes << endl;
 
   float * result=new float[n_nodes];
   size_t startp[2];
@@ -1623,6 +1639,7 @@ float *VarInfo::read_cell_z_at_time(int timestate, MeshInfo &mesh) {
   char var_scan[NC_MAX_NAME];
   if ( nc_inq_varname(ncid,var_id,var_scan) ) {
     debug1 << "Failed to read varname for var_id=" << var_id << endl;
+    delete[] result;
     return NULL;
   } else {
     debug1 << "Expected var name " << name << " and queried to get " << var_scan << endl;
@@ -1741,24 +1758,13 @@ avtUGRIDSingle::GetVar3D(int timestate,VarInfo &vi)
     for(int i=0;i<mesh.n_cells3d;i++) {
       rv->SetTuple1(i,full[i]);
     }
+    delete[] full;
   } else if ( vi.node_dimi>=0 ) {
     debug1 << "Not ready for 3D node variables" << endl;
     return NULL;
   }
 
   debug1 << "Done with GetVar3D for " << vi.name << endl;
-
-  // old reference cruft
-  //     float *full=read_cell_z_full(vi.name,timestate);
-  //     
-  //     int i3d=0;
-  //     for(int surf_cell=0;surf_cell<n_cells;surf_cell++) {
-  //       for(int k=cell_kmin[surf_cell];k<cell_kmax[surf_cell];k++) {
-  //         rv->SetTuple1(i3d,full[surf_cell*n_layers+k]);
-  //         i3d++;
-  //       }
-  //     }
-  //     delete[] full;
 
   return rv;
 }
@@ -1782,20 +1788,25 @@ avtUGRIDSingle::GetVar2D(int timestate,VarInfo &vi)
     rv->SetNumberOfComponents(1);
 
     full=vi.read_cell_at_time(timestate,mesh);
+    if( full==NULL) 
+      return rv;
 
     for(int i=0;i<mesh.n_cells2d;i++) {
       rv->SetTuple1(i,full[i]);
     }
+    delete[] full;
   } else if ( vi.node_dimi>=0 ) {
     rv->SetNumberOfTuples(mesh.n_nodes);
     rv->SetNumberOfComponents(1);
 
     full=vi.read_node_at_time(timestate,mesh);
+    if(full==NULL)
+      return rv;
 
     for(int i=0;i<mesh.n_nodes;i++) {
       rv->SetTuple1(i,full[i]);
     }
-    
+    delete[] full;
   }
 
   debug1 << "Done with GetVar2D for " << vi.name << endl;
@@ -1922,8 +1933,10 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   }
 
   // does the basename match?
-  if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 )
+  if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 ) {
+    regfree(&cre);
     return;
+  }
 
   debug1 << "Matched, pm[1] " << pm[1].rm_so << " to " << pm[1].rm_eo << endl;
 
@@ -1932,8 +1945,10 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   int proc_num=atoi(proc_str.c_str());
 
   // only look for subdomains if it looks like we were given domain 0.
-  if( proc_num!=0 ) 
+  if( proc_num!=0 ) {
+    regfree(&cre);
     return;
+  }
 
   debug1 << "Looks like proc 0: " << basename << endl;
 
@@ -1967,9 +1982,12 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
       filenames.push_back(all_files[file_idx]);
       break;
     }
-    if( file_idx==all_files.size() ) 
+    if( file_idx==all_files.size() ) {
+      regfree(&cre);
       return;
+    }
   }
+  regfree(&cre);
 }
 
 // How to handle avtDatabaseMetaData for top-level vs. 
@@ -2065,3 +2083,14 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
 }
 
 
+// Memory issues:
+// Animating the 3D grid drives up memory usage in top.
+// Animating the 2D grid drives up memory usage, too.
+
+// valgrind --leak-check=full...
+// "Indirectly lost" 16,752,728 in 2,246 blocks
+//  which is from vtkUnstructuredGrid::New() ins GetMesh2D.
+// Seem to have fixed the regex and Mesh2D leaks.
+
+// with Mesh3D, indirectly lost 185MB, possibly another 47MB.
+// fixed Mesh3D 
