@@ -1427,6 +1427,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
   string positive;
 
   for(int var_num=0;var_num<nvars;var_num++) {
+    debug5 << " Is variable " << var_num << " a vertical coordinate for dim " << dim << endl;
     if( nc_inq_varndims(ncid,var_num,&ndims) || 
         nc_inq_vardimid(ncid,var_num,dims) ) {
       debug1 << "  Failed.  How did that happen?" << endl;
@@ -1443,8 +1444,10 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
       continue ; // no match
 
     positive = get_att_as_string(ncid,var_num,"positive");
-    if ( positive == "" ) 
+    if ( positive == "" ) {
+      debug5 << "  Variable does not have positive attribute" << endl;
       continue; // not a vertical coordiante
+    }
     if ( ndims!=1 ) {
       debug1 << "  Variable is a vertical coordinate, but not 1-D.  Keep looking" << endl;
       continue;
@@ -1659,6 +1662,22 @@ float *VarInfo::read_cell_z_at_time(int timestate, MeshInfo &mesh) {
     debug1 << "Successfully read 3D float array for " << name << endl;
   }
 
+  // May have to transpose result:
+  if ( cell_dimi > layer_dimi ) {
+    debug1 << "In-memory transpose as dimensions are (layer,cell)" << endl;
+    float * trans_result=new float[n_cells*n_layers];
+    for(int cell=0;cell<n_cells;cell++) {
+      for(int layer=0;layer<n_layers;layer++) {
+        // in result, the fastest changing index is cell
+        // in trans_result, the fastest changing index is layer
+        trans_result[cell*n_layers + layer] = result[layer*n_cells + cell];
+      }
+    }
+    delete[] result;
+    result=trans_result;
+    debug1 << "Done with transpose" << endl;
+  }
+  
   return result;
 }
 
