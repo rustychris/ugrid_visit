@@ -475,8 +475,9 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
       }
       var_inf.mesh_name=var_mesh(var_scan);
       if ( var_inf.mesh_name != ugrid_mesh ) {
-        if ( var_inf.mesh_name != "" ) 
+        if ( var_inf.mesh_name != "" )  {
           debug1 << "Found another ugrid mesh.  Not ready for that." << endl;
+        }
         continue;
       }
 
