@@ -197,6 +197,7 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
   nc_inq_dimlen(ncid,node_dim,&n_nodes);
   
   debug1 << "Found " << n_nodes << " nodes" << endl;
+
 }
 
 vtkPoints *MeshInfo::GetNodes(void) {
@@ -1249,53 +1250,7 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
   char dim_name[NC_MAX_NAME];
   MeshInfo &mesh=mesh_table[default_ugrid_mesh];
 
-  // dirty logic ...
-
-  // if ( var_inf.spatial_dim_names.size() == 1 ) {
-  // 
-  //   // DFM kludge:
-  //   if (var_inf.spatial_dim_names[0]=="nFlowElem") {
-  //     mesh=mesh_table[default_ugrid_mesh];
-  //   } else if ( spatial_dims[0]==mesh.node_dim ) {
-  //     // really ought to be either iterating over meshes, or 
-  //     // using these dimensions to index/create meshes.
-  // 
-  //     // setting node_dimi below will indicate that it's node centered
-  //     mesh=mesh_table[default_ugrid_mesh]; 
-  //   } else {
-  //     // HERE: check spatial_dim_names[0] against
-  //     // the cell dimensions of any grids which already exist
-  //     // nFlowLink may also require some special DFM handling
-  //     return false;
-  //   }
-  //   var_inf.mesh_name=mesh.name;
-  // 
-  //   for(int d=0;d<var_inf.ndims;d++){
-  //     if ( var_inf.dims[d] == mesh.cell_dim ) {
-  //       var_inf.cell_dimi=d; 
-  //     } else if ( var_inf.dims[d] == mesh.node_dim ) {
-  //       // sample code..
-  //       var_inf.node_dimi=d;
-  //     } else {
-  //       // extra checks based on the name. KLUDGE.
-  //       if ( nc_inq_dimname(ncid,var_inf.dims[d],dim_name) ) {
-  //         debug1 << "Failed to read name of dimension" << endl;
-  //         continue;
-  //       }
-  //       if ( std::string(dim_name) == "nFlowElem" ) {
-  //         var_inf.cell_dimi=d;
-  //       }
-  //     }
-  //   }
-  //   
-  //   return true;
-  // } else if ( var_inf.spatial_dim_names.size() == 2 ) {
-
   // presumably a 3D field (not yet dealing with structured grids!)
-
-  // maybe this can be general for 2D and 3D, and replace that code
-  // above.
-
   for(int d=0;d<var_inf.ndims;d++){
     // iterate over known 2D meshes to see if there is a match on
     // cell or node dimension:
@@ -1945,8 +1900,15 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   regex_t cre;
   regmatch_t pm[2];
   regmatch_t pm_sub[2]; // for matching to other subdomains
-  
-  if ( regcomp(&cre, ".*_([0-9][0-9][0-9][0-9])_.*_map\\.nc$", REG_EXTENDED)) {
+
+  // need to match both
+  // This is a single output file, prefixed only by the name of the run.
+  // short_test_08_0000_map.nc
+  // and
+  // This is the name of the run, the proce, but then a timestamp
+  // wy2013c_0000_20120801_000000_map.nc
+  // The greediness is making that more difficult.
+  if ( regcomp(&cre, ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$", REG_EXTENDED)) {
     debug1 << "Couldn't compile pattern for finding raw data files" << endl;
     return;
   } else {
