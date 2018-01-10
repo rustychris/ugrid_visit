@@ -6,8 +6,12 @@
 # https://github.com/rustychris/ugrid_visit/issues/1
 
 # Adjust this based on Visit version and installation location
-#DEP_CMAKE=/Applications/VisIt2.10.app/Contents/Resources/2.10.2/darwin-x86_64/include/VisItLibraryDependencies.cmake
-DEP_CMAKE=/Applications/VisIt2.13.app/Contents/Resources/2.13.0/darwin-x86_64/include/VisItLibraryDependencies.cmake
+DEP_CMAKE=/Applications/VisIt2.10.app/Contents/Resources/2.10.2/darwin-x86_64/include/VisItLibraryDependencies.cmake
+
+# Seems that the OSX binary distribution for 2.13 has even worse contamination
+# of dependencies, and this simple sed expression is not sufficient.
+
+# DEP_CMAKE=/Applications/VisIt2.13.app/Contents/Resources/2.13.0/darwin-x86_64/include/VisItLibraryDependencies.cmake
 DEP_CMAKE_O=${DEP_CMAKE}.orig
 
 [ -f $DEP_CMAKE_O ] || cp ${DEP_CMAKE} ${DEP_CMAKE_O}
