@@ -48,7 +48,6 @@
 
 #include <DebugStream.h>
 
-#include <string>
 #include <algorithm> // sort, transform
 #include <vector>
 
@@ -78,14 +77,15 @@
  #include <regex.h>
 #endif
 
-using     std::string;
+#include <string>
+
 
 // for some reason, there are two ways to read string attributes
 // and it's difficult to predict which is correct.
-string get_att_as_string(int ncid,int varid,const char *att_name) {
+std::string get_att_as_string(int ncid,int varid,const char *att_name) {
   int retval;
   char *att_data;
-  string result("");
+  std::string result("");
 
   if ( !(retval=nc_get_att_string(ncid, varid, att_name,&att_data)) ) {
     result=att_data; // is that legal?
@@ -126,7 +126,7 @@ std::vector<std::string> split(const std::string src, char c = ' ')
     while(*str != c && *str)
       str++;
     
-    result.push_back(string(begin, str));
+    result.push_back(std::string(begin, str));
   } while (0 != *str++);
 
   return result;
@@ -154,7 +154,7 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
 
   debug1 << "Creating mesh info " << name << endl;
 
-  string cell_dim_name=get_att_as_string(ncid,varid,"face_dimension");
+  std::string cell_dim_name=get_att_as_string(ncid,varid,"face_dimension");
   if ( nc_inq_dimid(ncid,cell_dim_name.c_str(),&cell_dim) ) {
     debug1 << "Failed to read id of element dimension" << endl;
     return;
@@ -172,14 +172,14 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
     debug1 << "MeshInfo constructor: grid is 2D, so set n_cells3d=n_cells2d" << endl;
   }
 
-  string node_coords=get_att_as_string(ncid,varid,"node_coordinates");
+  std::string node_coords=get_att_as_string(ncid,varid,"node_coordinates");
   if( node_coords=="" ) return;
 
   debug1 << "Node coordinate values " << node_coords << endl;
 
-  string node_x=node_coords.substr(0,node_coords.find_first_of(" "));
+  std::string node_x=node_coords.substr(0,node_coords.find_first_of(" "));
   // debug1 << "node x variable '" << node_x << "'" << endl;
-  string node_y=node_coords.substr(node_coords.find_last_of(" ")+1,
+  std::string node_y=node_coords.substr(node_coords.find_last_of(" ")+1,
                                    node_coords.length());
   // debug1 << "node y variable '" << node_y << "'" << endl;
 
@@ -271,7 +271,7 @@ MeshInfo::GetMesh2D(int timestate)
 
   nc_type xtype;
   
-  string face_node=get_att_as_string(ncid,varid,"face_node_connectivity");
+  std::string face_node=get_att_as_string(ncid,varid,"face_node_connectivity");
 
   debug1 << "Face-Node connectivity " << face_node << endl;
 
@@ -487,7 +487,7 @@ MeshInfo::set_layer_bounds(std::string z_std_name,
 {
   // and the bounds variable? no guarantees that this exists.
   int bounds_var;
-  string bounds_name=get_att_as_string(ncid,layer_z_var,"bounds");
+  std::string bounds_name=get_att_as_string(ncid,layer_z_var,"bounds");
   if ( bounds_name == "" ) {
     debug1 << "No bounds attribute" << endl;
     bounds_var=-1;
@@ -942,7 +942,7 @@ avtUGRIDSingle::avtUGRIDSingle(const char *filename)
   default_ugrid_mesh=""; // defaults to first found
 
   for(int varid=0;varid<nvars;varid++) {
-    string cf_role=get_att_as_string(ncid,varid,"cf_role");
+    std::string cf_role=get_att_as_string(ncid,varid,"cf_role");
     if( cf_role=="mesh_topology" ) {
       MeshInfo minfo(ncid,varid);
       if(default_ugrid_mesh=="") {
@@ -965,15 +965,15 @@ avtUGRIDSingle::~avtUGRIDSingle() {
   delete[] cell_kmax;
 }
 
-string avtUGRIDSingle::var_mesh2d(std::string varname) {
+std::string avtUGRIDSingle::var_mesh2d(std::string varname) {
   int varid;
   nc_inq_varid(ncid,varname.c_str(),&varid);
   return var_mesh2d(varid);
 }
 
-string avtUGRIDSingle::var_mesh2d(int varid) {
+std::string avtUGRIDSingle::var_mesh2d(int varid) {
   // any reason not to use this same convenience util?
-  string result=get_att_as_string(ncid,varid,"mesh");
+  std::string result=get_att_as_string(ncid,varid,"mesh");
 
   if( result=="" ) {
     result=default_ugrid_mesh;
@@ -1038,7 +1038,7 @@ void avtUGRIDSingle::GetTimes(std::vector<double> &times)
 
   double to_days=1;
 
-  string units=get_att_as_string(ncid,time_var,"units");
+  std::string units=get_att_as_string(ncid,time_var,"units");
 
   if ( units.find("second")== 0) {
     to_days=1./86400;
@@ -1100,7 +1100,7 @@ avtUGRIDSingle::FreeUpResources(void)
 // ****************************************************************************
 void avtUGRIDSingle::initialize_metadata(void) 
 {
-  string ugrid_mesh=default_ugrid_mesh;
+  std::string ugrid_mesh=default_ugrid_mesh;
 
   // Loop through variables in file, trying to match them to grids
   // and register with metadata
@@ -1166,7 +1166,7 @@ void avtUGRIDSingle::initialize_metadata(void)
 void
 avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
 {
-  string svar_scan;
+  std::string svar_scan;
   int nblocks = 1;  // <-- this must be 1 for MTSD
   int block_origin = 0;
   int spatial_dimension = 2;
@@ -1182,7 +1182,7 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
 
     VarInfo &var_inf=it->second;
 
-    string units=get_att_as_string(ncid,var_inf.var_id,"units");
+    std::string units=get_att_as_string(ncid,var_inf.var_id,"units");
     if (units != "" ) {
       smd->hasUnits=true;
       smd->units=units;
@@ -1337,7 +1337,7 @@ avtUGRIDSingle::create_3d_mesh(std::string mesh2d,int z_dim,int z_var) {
   char z_var_name[NC_MAX_NAME];
   nc_inq_varname(ncid,z_var,z_var_name);
 
-  std::string result=mesh2d+"."+string(z_var_name);
+  std::string result=mesh2d+"."+std::string(z_var_name);
 
   debug1 << "Combining 2D mesh " << mesh2d << " with vertical coordinate " << z_var_name << endl;
   debug1 << "  Result is " << result << endl;
@@ -1379,7 +1379,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
   char dim_name[NC_MAX_NAME];
   int ndims;
   int dims[MAX_DIMS];
-  string positive;
+  std::string positive;
 
   for(int var_num=0;var_num<nvars;var_num++) {
     debug5 << " Is variable " << var_num << " a vertical coordinate for dim " << dim << endl;
@@ -1462,8 +1462,8 @@ vtkUnstructuredGrid *avtUGRIDSingle::GetMeshNodes(const std::string ugrid_mesh)
 vtkDataSet *
 avtUGRIDSingle::GetMesh(int timestate, const char *meshname)
 {
-  string requested(meshname);
-  string ugrid_mesh;
+  std::string requested(meshname);
+  std::string ugrid_mesh;
   int ndim;
   int retval;
 
@@ -1472,13 +1472,13 @@ avtUGRIDSingle::GetMesh(int timestate, const char *meshname)
 
   // this should probably be removed in favor of routing everything through
   // the mesh_table:
-  if ( requested.find(".nodes") != string::npos) {
+  if ( requested.find(".nodes") != std::string::npos) {
     ugrid_mesh = requested.substr(0,requested.length()-6);
     debug1 << "UGRID:GetMesh: requested '"<< requested << "' - will hand to GetMeshNodes" << endl;
     return GetMeshNodes(ugrid_mesh);
   } 
 
-  // if(  requested.find(".2d",requested.length()-3) != string::npos ) {
+  // if(  requested.find(".2d",requested.length()-3) != std::string::npos ) {
   // ugrid_mesh = requested.substr(0,requested.length()-3);
   // ndim=2;
   if ( mesh_table.find(meshname) != mesh_table.end() ) {
@@ -1879,8 +1879,8 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
 {
   std::vector<std::string> all_files; // everything in the directory
 
-  string my_path = FileFunctions::Dirname(filename);
-  string basename=FileFunctions::Basename(filename);
+  std::string my_path = FileFunctions::Dirname(filename);
+  std::string basename=FileFunctions::Basename(filename);
 
   // the specified file is always first
   filenames.push_back(filename);
@@ -1888,7 +1888,15 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   // Somehow this chunk of code is problematic:
 
   // The quest for subdomains:
-  FileFunctions::ReadAndProcessDirectory( my_path, save_file_name, &all_files, false );
+  // trouble linking this one:
+  // exact prototype is (include/visit/common/misc/FileFunctions.h)
+  //   bool        MISC_API ReadAndProcessDirectory(const std::string &,
+  //                                         ProcessDirectoryCallback *,
+  //                                         void * = 0,
+  //                                         bool = false);
+  
+       
+  FileFunctions::ReadAndProcessDirectory( my_path, (FileFunctions::ProcessDirectoryCallback*)save_file_name, (void*)&all_files, false );
   debug1 << "my_path: " << my_path << endl;
   debug1 << "base: " << basename << endl;
   // now all of the files, including ., .., are in the filenames vector.
@@ -1939,7 +1947,7 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
     int file_idx=0;
     for(;file_idx<all_files.size();file_idx++) {
-      string basename_sub=FileFunctions::Basename(all_files[file_idx]);
+      std::string basename_sub=FileFunctions::Basename(all_files[file_idx]);
 
       if ( regexec(&cre, basename_sub.c_str(), 2, pm_sub, 0) != 0 ) 
         continue;
@@ -2065,15 +2073,3 @@ avtUGRIDFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeSt
   }
 }
 
-
-// Memory issues:
-// Animating the 3D grid drives up memory usage in top.
-// Animating the 2D grid drives up memory usage, too.
-
-// valgrind --leak-check=full...
-// "Indirectly lost" 16,752,728 in 2,246 blocks
-//  which is from vtkUnstructuredGrid::New() ins GetMesh2D.
-// Seem to have fixed the regex and Mesh2D leaks.
-
-// with Mesh3D, indirectly lost 185MB, possibly another 47MB.
-// fixed Mesh3D 
