@@ -2,11 +2,14 @@
 
 # This is a kludge, temporary fix for some cmake chicanery
 # see https://visitbugs.ornl.gov/issues/2611
-# and brief mention for this pluging:
+# and brief mention for this plugin:
 # https://github.com/rustychris/ugrid_visit/issues/1
 
 # Adjust this based on Visit version and installation location
-DEP_CMAKE=/Applications/VisIt2.10.app/Contents/Resources/2.10.2/darwin-x86_64/include/VisItLibraryDependencies.cmake
+# The glob here attempts to grab the right version string which is embedded in the path.
+# nonstandard install location or an installation with multiple versions will have to
+# manually fix this line
+DEP_CMAKE=`echo /Applications/VisIt.app/Contents/Resources/*/darwin-x86_64/include/VisItLibraryDependencies.cmake`
 
 # Seems that the OSX binary distribution for 2.13 has even worse contamination
 # of dependencies, and this simple sed expression is not sufficient.
