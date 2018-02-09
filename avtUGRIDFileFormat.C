@@ -475,10 +475,117 @@ vtkDataArray *MeshInfo::ZoneToNode2D(vtkDataArray *zonal,vtkUnstructuredGrid *ds
   return outv;
 }
 
+
+bool MeshInfo::set_bounds_from_variable(int bounds_var,
+                                        std::vector<float> &layer_bottom,
+                                        std::vector<float> &layer_top)
+{
+  float *layer_bounds=new float[2*n_layers];
+  
+  if ( nc_get_var_float(ncid,bounds_var,layer_bounds) ) {
+    debug1 << "Failed to read layer bounds" << endl;
+    bounds_var=-1; // fall through to next section
+  } else {
+    for(int i=0;i<n_layers;i++) {
+      layer_bottom[i]=layer_bounds[2*i];
+      layer_top[i]=layer_bounds[2*i+1];
+    }
+  }
+  delete[] layer_bounds;
+
+  return bounds_var>=0;
+}
+
+bool MeshInfo::set_bounds_from_dfm_flowelem_zw(std::vector<float> &layer_bottom,
+                                               std::vector<float> &layer_top)
+{
+  int flowelem_zw_var;
+  int k;
+
+  if( nc_inq_varid(ncid,"FlowElem_zw",&flowelem_zw_var) ) {
+    debug1 << "No FlowElem_zw, will not try DFM workaround" << endl;
+    return false;
+  }
+
+  // in the netcdf map output FlowElem_zw has dimensions time, element, wdim
+  size_t startp[3];
+  size_t countp[3];
+
+  startp[0]=0;
+  countp[0]=1;
+  startp[1]=0;
+  countp[1]=n_cells2d;
+  startp[2]=0;
+  countp[2]=n_layers+1;
+  
+  float *elem_zw=new float[countp[0]*countp[1]*countp[2]];
+
+  // scan full field, but only at first time step
+  if ( nc_get_vara_float(ncid,flowelem_zw_var,startp,countp,elem_zw) ) {
+    debug1 << "Failed to read FlowElem_zw" << endl;
+    delete[] elem_zw;
+    return false;
+  }
+
+  // looking for the deepest one
+  float z;
+  float z_min=1e10;
+  for(int c=0;c<n_cells2d;c++) {
+    z=elem_zw[c*(n_layers+1)];
+    if (z>1e10) // missing value
+      continue; 
+
+    if( z >= z_min )
+      continue;
+    
+    z_min=z; // this is the deepest so far
+
+    // copy this one.  Go from the surface down, because DFM writes these
+    // values padded on the surface end, whereas other variables and the mesh
+    // are padded on the bed end of the array.
+    int k_real=n_layers; // used for indexing layer_bottom and top
+    // the loop k is indexing FlowElem_zw
+    
+    for(k=n_layers;k>=0;k--) {
+      z=elem_zw[c*(n_layers+1)+k];
+      if (z>1e10) { // watercolumn is missing surface cells. keep going deeper
+        continue;
+      }
+      
+      if(k_real<n_layers)
+        layer_bottom[k_real]=z;
+      if(k_real>0)
+        layer_top[k_real-1]=z;
+      k_real--;
+    }
+    
+    // fill in bogus data below there:
+    for(;k_real>=0;k_real--) {
+      // fabricate unit-thickness layers from there down.
+      z=layer_bottom[k_real+1] - 1;
+      if(k_real<n_layers)
+        layer_bottom[k_real]=z;
+      if(k_real>0)
+        layer_top[k_real-1]=z;
+    }
+  }
+
+  for(k=0;k<n_layers;k++) {
+    debug1 << " layer k="<<k<<" bottom="<< layer_bottom[k] << " top="<<layer_top[k]<<endl;
+  }
+
+  delete[] elem_zw;
+
+  debug1 << "Set layer bounds based on FlowElem_zw" << endl;
+  return true;
+}
+
+
 /* set_layer_bounds
  * based on UGRID layer coordinates and optional layer bounds,
  * populate elevations for top/bottom coordinates.  does not 
- * apply sigma transform.
+ * apply sigma transform.  Does not handle coordinates which differ
+ * in space.
  */
 void
 MeshInfo::set_layer_bounds(std::string z_std_name,
@@ -507,81 +614,75 @@ MeshInfo::set_layer_bounds(std::string z_std_name,
   layer_top.resize(n_layers);
 
   if ( bounds_var>= 0) {
-    float *layer_bounds=new float[2*n_layers];
+    if ( set_bounds_from_variable(bounds_var,layer_bottom,layer_top) )
+      return;
+  }
+
+  // DFM workaround, if FullGridOutput=1, and maybe just z-layers even then.
+  if ( set_bounds_from_dfm_flowelem_zw(layer_bottom,layer_top) )
+    return;
   
-    if ( nc_get_var_float(ncid,bounds_var,layer_bounds) ) {
-      debug1 << "Failed to read layer bounds" << endl;
-      bounds_var=-1; // fall through to next section
-    }
+  //  bounds_var<0, or failed to use bounds_var
+  // read layer centers, extrapolate to layer bounds
+  float *layer_centers=new float[n_layers];
+
+  if ( nc_get_var_float(ncid,layer_z_var,layer_centers) ) {
+    debug1 << "Failed to read layer_z_var" << endl;
+    debug1 << "Fabricating!" << endl;
     for(int i=0;i<n_layers;i++) {
-      layer_bottom[i]=layer_bounds[2*i];
-      layer_top[i]=layer_bounds[2*i+1];
+      layer_centers[i]=(float)(i+0.5) / (float)n_layers;
     }
-    delete[] layer_bounds;
   }
-  
-  if ( bounds_var<0 ) {
-    // read layer centers, extrapolate to layer bounds
-    float *layer_centers=new float[n_layers];
 
-    if ( nc_get_var_float(ncid,layer_z_var,layer_centers) ) {
-      debug1 << "Failed to read layer_z_var" << endl;
-      debug1 << "Fabricating!" << endl;
-      for(int i=0;i<n_layers;i++) {
-        layer_centers[i]=(float)(i+0.5) / (float)n_layers;
-      }
+  // Special DFlowFM workaround - layer coordinates are
+  // incorrect after first output, at least in r50237
+  if( fabs(layer_centers[0]) > 100000 ) {
+    debug1 << "layer coordinate looks corrupted.  Will fabricate." << endl;
+    for(int i=0;i<n_layers;i++) {
+      layer_centers[i]=(float)(i+0.5) / (float)n_layers;
     }
+  }
 
-    // Special DFlowFM workaround - layer coordinates are
-    // incorrect after first output, at least in r50237
-    if( fabs(layer_centers[0]) > 100000 ) {
-      debug1 << "layer coordinate looks corrupted.  Will fabricate." << endl;
-      for(int i=0;i<n_layers;i++) {
-        layer_centers[i]=(float)(i+0.5) / (float)n_layers;
-      }
-    }
-
-    if ( n_layers==1 ) {
-      if ( z_std_name=="ocean_zlevel_coordinate" ) {
-        // total punt - could get smarter and look for 
-        // eta and bedlevel.
-        layer_bottom[0]=layer_centers[0]-0.5;
-        layer_top[0]=layer_centers[0]+0.5;
-      } else {
-        // reasonable guess for sigma coordinates
-        layer_bottom[0]=0;
-        layer_top[0]=1;
-      }
+  if ( n_layers==1 ) {
+    if ( z_std_name=="ocean_zlevel_coordinate" ) {
+      // total punt - could get smarter and look for 
+      // eta and bedlevel.
+      layer_bottom[0]=layer_centers[0]-0.5;
+      layer_top[0]=layer_centers[0]+0.5;
     } else {
-      for(int k=0;k<n_layers;k++) {
-        debug1 << "k = " << k << " of n_layers = " << n_layers << endl;
-        // Set the lower bound:
-        if (k==0) {
-          if( (z_std_name=="ocean_zlevel_coordinate") ) { 
-            layer_bottom[k]=layer_centers[0] - 0.5*(layer_centers[1]-layer_centers[0]);
-          } else {
-            layer_bottom[k]=0; // may need to adjust based on sign conventions.
-          }
-        } else {
-          // copy from previous layer
-          layer_bottom[k]=layer_top[k-1];
-        }
-
-        // and the top of the layer
-        if (k==n_layers-1) {
-          if( (z_std_name=="ocean_zlevel_coordinate") ) { 
-            layer_top[k]=layer_bottom[k] + (layer_centers[k]-layer_centers[k-1]);
-          } else {
-            layer_top[k]=1; // may need to adjust based on sign conventions.
-          }
-        } else {
-          layer_top[k]=0.5*(layer_centers[k]+layer_centers[k+1]);
-        }
-        debug1 << "Layer bounds: " << layer_bottom[k] << " to " << layer_top[k] << endl;
-      }
+      // reasonable guess for sigma coordinates
+      layer_bottom[0]=0;
+      layer_top[0]=1;
     }
-    delete[] layer_centers;
+  } else {
+    for(int k=0;k<n_layers;k++) {
+      debug1 << "k = " << k << " of n_layers = " << n_layers << endl;
+      // Set the lower bound:
+      if (k==0) {
+        if( (z_std_name=="ocean_zlevel_coordinate") ) { 
+          layer_bottom[k]=layer_centers[0] - 0.5*(layer_centers[1]-layer_centers[0]);
+        } else {
+          layer_bottom[k]=0; // may need to adjust based on sign conventions.
+        }
+      } else {
+        // copy from previous layer
+        layer_bottom[k]=layer_top[k-1];
+      }
+
+      // and the top of the layer
+      if (k==n_layers-1) {
+        if( (z_std_name=="ocean_zlevel_coordinate") ) { 
+          layer_top[k]=layer_bottom[k] + (layer_centers[k]-layer_centers[k-1]);
+        } else {
+          layer_top[k]=1; // may need to adjust based on sign conventions.
+        }
+      } else {
+        layer_top[k]=0.5*(layer_centers[k]+layer_centers[k+1]);
+      }
+      debug1 << "Layer bounds: " << layer_bottom[k] << " to " << layer_top[k] << endl;
+    }
   }
+  delete[] layer_centers;
 }
 
 
@@ -621,7 +722,17 @@ MeshInfo::ExtrudeTo3D(int timestate,
   std::string z_std_name=get_att_as_string(ncid,layer_z_var,"standard_name");
   if ( z_std_name == "" ) {
     debug1 << "No standard name on z coordinate variable.  Can't tell sigma vs. z" << endl;
-    return NULL;
+
+    std::string z_long_name=get_att_as_string(ncid,layer_z_var,"long_name");
+    if ( z_long_name.find("z layer")==0 ) {
+      debug1 << "Long name suggests z coordinate" << endl;
+      z_std_name="ocean_zlevel_coordinate";
+    } else if( z_long_name.find("sigma layer")==0 ) {
+      debug1 << "Long name suggests sigma coordinate" << endl;
+      z_std_name="ocean_sigma_coordinate";
+    } else {
+      return NULL;
+    }
   }
   
   if ( z_std_name=="ocean_sigma_coordinate" ) {
