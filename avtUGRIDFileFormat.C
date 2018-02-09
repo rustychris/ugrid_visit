@@ -992,6 +992,7 @@ VarInfo::init(void)
   time_dimi=cell_dimi=layer_dimi=node_dimi=-1;
   var_id=-1;
   ncid=-1;
+  pseudo=P_REAL;
 }
 
 VarInfo::VarInfo(const VarInfo &a)
@@ -1004,6 +1005,7 @@ VarInfo::VarInfo(const VarInfo &a)
   layer_dimi=a.layer_dimi;
   node_dimi=a.node_dimi;
   time_dim=a.time_dim;
+  pseudo=a.pseudo;
 
   var_id=a.var_id;
   ncid=a.ncid;
@@ -1018,11 +1020,12 @@ VarInfo::VarInfo(const VarInfo &a)
 //
 // ****************************************************************************
 
-avtUGRIDSingle::avtUGRIDSingle(const char *filename)
+avtUGRIDSingle::avtUGRIDSingle(const char *filename,int _domain)
   : avtMTSDFileFormat(&filename, 1)
 {
   // INITIALIZE DATA MEMBERS
   int retval;
+  domain=_domain;
   
   if ( nc_open(filename, NC_NOWRITE, &ncid) ) {
     debug1 << "Failed to open " << filename << endl;
@@ -1258,6 +1261,32 @@ void avtUGRIDSingle::initialize_metadata(void)
     debug1 << "initialize_metadata: var '" << var_inf.name << "' => mesh " 
            << var_inf.mesh_name << endl;
   }
+
+  // For any meshes that were found along the way, create a .domain variable
+  // There does not appear to be function in VisIt expressions which returns
+  // the domain ID.  Add that as a pseudo-variable for each mesh.
+  for (std::map<std::string,MeshInfo>::iterator it=mesh_table.begin();
+       it!=mesh_table.end();
+       ++it) {
+    std::string name=it->second.name + ".domain";
+      
+    VarInfo var_inf(name);
+    var_inf.pseudo=VarInfo::P_DOMAIN;
+    var_inf.ncid=-1; // no netcdf variable associated
+    var_inf.time_dimi=-1; // no time
+    // copy some dimensions from the mesh
+    // Need to rethink this
+    if ( it->second.cell_dim >= 0)
+      var_inf.cell_dimi=1;
+    if ( it->second.node_dim >= 0)
+      var_inf.node_dimi=1;
+    if ( it->second.layer_dim >= 0)
+      var_inf.layer_dimi=1;
+    var_inf.mesh_name=it->second.name;
+      
+    var_table[name]=var_inf;
+    debug1 << "initialize_metadata: added mesh domain var " << var_inf.name << endl;
+  }
 }
 
 // ****************************************************************************
@@ -1333,8 +1362,9 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
     debug1 << "PopulateDatabaseMetadata: adding mesh " << it->second.name
            << " spatial_dimension=" << spatial_dimension << endl;
     // AddMeshToMetaData(md,it->second.name+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
-  }
 
+  }
+  
   // CODE TO ADD A VECTOR VARIABLE
   //
   // string mesh_for_this_var = meshname; // ??? -- could be multiple meshes
@@ -1677,7 +1707,7 @@ float *VarInfo::read_cell_z_at_time(int timestate, MeshInfo &mesh) {
 
   if ( nc_inq_dimlen(ncid,mesh.cell_dim,&n_cells) ||
        nc_inq_dimlen(ncid,mesh.layer_dim,&n_layers) ) {
-    debug1 << "Somehow late read of n_cells or n_layers failed" << endl;
+    debug1 << "Somehow late read of n_cells or n_layers failed for var " << name << endl;
     return NULL;
   }
 
@@ -1801,7 +1831,7 @@ avtUGRIDSingle::GetVar(int timestate, const char *varname)
       it++; // move to next entry
     }
   }
-  
+
   if( vi.name == "" ) {
     debug1 << "BAD: appears that varname " << varname << " is not in the table" << endl;
     return NULL;
@@ -1833,6 +1863,8 @@ avtUGRIDSingle::GetVar3D(int timestate,VarInfo &vi)
   debug1 << "GetVar3D(" << timestate << "," << vi.name << ")" << endl;
   debug1 << "GetVar3D: var.mesh_name is " << vi.mesh_name << endl;
   debug1 << "GetVar3D: mesh is " << mesh.name << endl;
+  debug1 << "GetVar3D: pseudo is " << vi.pseudo << endl;
+  debug1 << "GetVar3D: P_DOMAIN " << VarInfo::P_DOMAIN << endl;
 
   if ( vi.cell_dimi>=0 ) {
     rv->SetNumberOfTuples(mesh.n_cells3d);
@@ -1840,12 +1872,18 @@ avtUGRIDSingle::GetVar3D(int timestate,VarInfo &vi)
 
     debug1 << " allocating " << mesh.n_cells3d << endl;
 
-    full=vi.read_cell_z_at_time(timestate,mesh);
-    // almost certainly some quick shortcut for this.
-    for(int i=0;i<mesh.n_cells3d;i++) {
-      rv->SetTuple1(i,full[i]);
+    if ( vi.pseudo==VarInfo::P_DOMAIN ) {
+      for(int i=0;i<mesh.n_cells3d;i++) {
+        rv->SetTuple1(i,(float)domain);
+      }
+    } else {
+      full=vi.read_cell_z_at_time(timestate,mesh);
+      // almost certainly some quick shortcut for this.
+      for(int i=0;i<mesh.n_cells3d;i++) {
+        rv->SetTuple1(i,full[i]);
+      }
+      delete[] full;
     }
-    delete[] full;
   } else if ( vi.node_dimi>=0 ) {
     debug1 << "Not ready for 3D node variables" << endl;
     return NULL;
@@ -2097,7 +2135,7 @@ avtUGRIDSingle *avtUGRIDFileFormat::subdomain(int domain) {
     debug1 << "Allocating new UGRIDSingle instance" << endl;
 
     // placeholder handling of filepath
-    domain_cache[domain] = new avtUGRIDSingle(filenames[domain].c_str());
+    domain_cache[domain] = new avtUGRIDSingle(filenames[domain].c_str(),domain);
     // this will initialize some internal state, too.
     metadata_cache[domain] = new avtDatabaseMetaData();
     // punt with timestate=0

@@ -105,6 +105,9 @@ public:
   std::string name;
   std::string mesh_name;
   std::vector<std::string> spatial_dim_names;
+  enum Pseudo { P_REAL, P_DOMAIN};
+  VarInfo::Pseudo pseudo;
+  
   int ndims;
   int dims[MAX_DIMS];
 
@@ -143,7 +146,9 @@ public:
 class avtUGRIDSingle : public avtMTSDFileFormat
 {
   public:
-  avtUGRIDSingle(const char *);
+  int domain;
+  
+  avtUGRIDSingle(const char *,int);
 
   virtual ~avtUGRIDSingle();
 
