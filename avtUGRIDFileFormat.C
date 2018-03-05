@@ -1912,14 +1912,20 @@ avtUGRIDSingle::GetVar2D(int timestate,VarInfo &vi)
     rv->SetNumberOfTuples(mesh.n_cells2d);
     rv->SetNumberOfComponents(1);
 
-    full=vi.read_cell_at_time(timestate,mesh);
-    if( full==NULL) 
-      return rv;
+    if ( vi.pseudo==VarInfo::P_DOMAIN ) {
+      for(int i=0;i<mesh.n_cells2d;i++) {
+        rv->SetTuple1(i,domain);
+      }
+    } else {
+      full=vi.read_cell_at_time(timestate,mesh);
+      if( full==NULL) 
+        return rv;
 
-    for(int i=0;i<mesh.n_cells2d;i++) {
-      rv->SetTuple1(i,full[i]);
+      for(int i=0;i<mesh.n_cells2d;i++) {
+        rv->SetTuple1(i,full[i]);
+      }
+      delete[] full;
     }
-    delete[] full;
   } else if ( vi.node_dimi>=0 ) {
     rv->SetNumberOfTuples(mesh.n_nodes);
     rv->SetNumberOfComponents(1);

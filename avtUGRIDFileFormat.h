@@ -105,7 +105,7 @@ public:
   std::string name;
   std::string mesh_name;
   std::vector<std::string> spatial_dim_names;
-  enum Pseudo { P_REAL, P_DOMAIN};
+  enum Pseudo {P_REAL, P_DOMAIN, P_EXTRUDE};
   VarInfo::Pseudo pseudo;
   
   int ndims;
