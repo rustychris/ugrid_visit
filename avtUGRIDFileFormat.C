@@ -662,7 +662,15 @@ MeshInfo::set_layer_bounds(std::string z_std_name,
         if( (z_std_name=="ocean_zlevel_coordinate") ) { 
           layer_bottom[k]=layer_centers[0] - 0.5*(layer_centers[1]-layer_centers[0]);
         } else {
-          layer_bottom[k]=0; // may need to adjust based on sign conventions.
+          // sigma coordinate may be increasing or decreasing, independent of
+          // the positive: up/down attribute.  This comes up with DWAQ output where
+          // layers start at the surface and increasing layer dimensions goes towards
+          // the bed.
+          if( layer_centers[1] > layer_centers[0] ) {
+            layer_bottom[k]=0; 
+          } else {
+            layer_bottom[k]=1;
+          }
         }
       } else {
         // copy from previous layer
@@ -674,7 +682,9 @@ MeshInfo::set_layer_bounds(std::string z_std_name,
         if( (z_std_name=="ocean_zlevel_coordinate") ) { 
           layer_top[k]=layer_bottom[k] + (layer_centers[k]-layer_centers[k-1]);
         } else {
-          layer_top[k]=1; // may need to adjust based on sign conventions.
+          // whatever the increasing/decreasing state of the sigma coordinate,
+          // top of the top should be opposite bottom of the bottom.
+          layer_top[k]=1-layer_bottom[0]; 
         }
       } else {
         layer_top[k]=0.5*(layer_centers[k]+layer_centers[k+1]);
