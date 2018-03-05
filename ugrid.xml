@@ -7,7 +7,7 @@
       ${NETCDF_LIBRARY_DIR}
     </LDFLAGS>
     <LIBS>
-      ${NETCDF_LIB} 
+      ${NETCDF_LIB} vtkCommonExecutionModel-6.1
     </LIBS>
     <FilePatterns>
       *.nc
