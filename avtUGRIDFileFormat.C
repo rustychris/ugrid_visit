@@ -156,8 +156,25 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
 
   std::string cell_dim_name=get_att_as_string(ncid,varid,"face_dimension");
   if ( nc_inq_dimid(ncid,cell_dim_name.c_str(),&cell_dim) ) {
-    debug1 << "Failed to read id of element dimension" << endl;
-    return;
+    debug1 << "Failed to read id of face_dimension " << endl;
+    // suntans ugrid does not necessarily have this.
+    // can we get it via face_node_connectivity?
+    std::string face_node=get_att_as_string(ncid,varid,"face_node_connectivity");
+    // something like "cells"
+    // then what is the first dimension of cells?
+    debug1 << "Work around for face_dimension, read face_node_connectivity" << endl;
+    int face_node_var;
+    if ( nc_inq_varid(ncid,face_node.c_str(),&face_node_var) ) {
+      debug1 << "Couldn't read that variable either.  Bailing" << endl;
+      return;
+    }
+    // how to get the dimid of that variables first dimension?
+    int face_node_dims[2]; // assume that face_node_connectivity has 2 dimensions
+    if ( nc_inq_vardimid(ncid,face_node_var,face_node_dims) ) {
+      debug1 << "Somehow failed to read the dimension ids for that" << endl;
+      return;
+    }
+    cell_dim=face_node_dims[0];
   }
 
   if ( nc_inq_dimlen(ncid,cell_dim,&n_cells2d) ) {
@@ -318,6 +335,14 @@ MeshInfo::GetMesh2D(int timestate)
     for(n=0;n<max_node_per_face;n++) {
       if (faces[f*max_node_per_face+n] == face_node_fill ) 
         break;
+      // be lenient here - any node value that doesn't make sense
+      // is considered face_node_fill.  This helps with suntans ugrid
+      // where FillValue is not set on grid topology variables.
+      if (faces[f*max_node_per_face+n]-face_node_start<0)
+        break;
+      if (faces[f*max_node_per_face+n]-face_node_start>=n_nodes)
+        break;
+
       // last dimension varies fastest
       // convert to zero-based index
       // have to see if this is the right order
