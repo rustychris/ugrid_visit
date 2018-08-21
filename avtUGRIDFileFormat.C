@@ -2075,17 +2075,7 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   // the specified file is always first
   filenames.push_back(filename);
 
-  // Somehow this chunk of code is problematic:
-
-  // The quest for subdomains:
-  // trouble linking this one:
-  // exact prototype is (include/visit/common/misc/FileFunctions.h)
-  //   bool        MISC_API ReadAndProcessDirectory(const std::string &,
-  //                                         ProcessDirectoryCallback *,
-  //                                         void * = 0,
-  //                                         bool = false);
-  
-       
+  // a bit tricky to get this prototype right, but here it is:
   FileFunctions::ReadAndProcessDirectory( my_path, (FileFunctions::ProcessDirectoryCallback*)save_file_name, (void*)&all_files, false );
   debug1 << "my_path: " << my_path << endl;
   debug1 << "base: " << basename << endl;
@@ -2099,76 +2089,144 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   regmatch_t pm[2];
   regmatch_t pm_sub[2]; // for matching to other subdomains
 
-  // need to match both
-  // This is a single output file, prefixed only by the name of the run.
-  // short_test_08_0000_map.nc
-  // and
-  // This is the name of the run, the proce, but then a timestamp
-  // wy2013c_0000_20120801_000000_map.nc
-  // The greediness is making that more difficult.
-  if ( regcomp(&cre, ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$", REG_EXTENDED)) {
-    debug1 << "Couldn't compile pattern for finding raw data files" << endl;
-    return;
-  } else {
-    debug1 << "Compiled the regex" << endl;
-  }
-
-  // does the basename match?
-  if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 ) {
-    regfree(&cre);
-    return;
-  }
-
-  debug1 << "Matched, pm[1] " << pm[1].rm_so << " to " << pm[1].rm_eo << endl;
-
-  std::string proc_str=std::string(basename.c_str()+pm[1].rm_so,
-                                   pm[1].rm_eo - pm[1].rm_so);
-  int proc_num=atoi(proc_str.c_str());
-
-  // only look for subdomains if it looks like we were given domain 0.
-  if( proc_num!=0 ) {
-    regfree(&cre);
-    return;
-  }
-
-  debug1 << "Looks like proc 0: " << basename << endl;
-
-  debug1 << "About to loop through candidate filenames" << endl;
-  for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
-    int file_idx=0;
-    for(;file_idx<all_files.size();file_idx++) {
-      std::string basename_sub=FileFunctions::Basename(all_files[file_idx]);
-
-      if ( regexec(&cre, basename_sub.c_str(), 2, pm_sub, 0) != 0 ) 
-        continue;
-
-      // only okay if the everything except the domain is the same.
-      if( basename.substr(0,pm[1].rm_so) != 
-          basename_sub.substr(0,pm_sub[1].rm_so) )
-        continue;
-      if( basename.substr(pm[1].rm_eo,std::string::npos) != 
-          basename_sub.substr(pm_sub[1].rm_eo,std::string::npos) )
-        continue;
-
-      debug5 << "Maybe " << basename_sub << endl;
-      
-      std::string proc_str=std::string(basename_sub.c_str()+pm[1].rm_so,
-                                       pm[1].rm_eo - pm[1].rm_so);
-      int proc_num=atoi(basename_sub.substr(pm_sub[1].rm_so,
-                                            pm_sub[1].rm_eo).c_str());
-      if( proc_num!= proc ) 
-        continue;
-
-      debug1 << "Yep! " << basename_sub << endl;
-      filenames.push_back(all_files[file_idx]);
-      break;
+  // within block throw false to proceed with next possible pattern
+  try { // DFLOWFM partitioned output
+    // need to match both
+    // This is a single output file, prefixed only by the name of the run.
+    // short_test_08_0000_map.nc
+    // and
+    // This is the name of the run, the proc, but then a timestamp
+    // wy2013c_0000_20120801_000000_map.nc
+    // The greediness is making that more difficult.
+    if ( regcomp(&cre, ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$", REG_EXTENDED)) {
+      debug1 << "Couldn't compile pattern for finding raw data files" << endl;
+      throw false;
+    } else {
+      debug1 << "Compiled the regex" << endl;
     }
-    if( file_idx==all_files.size() ) {
+
+    // does the basename match?
+    if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 ) {
       regfree(&cre);
-      return;
+      throw false;
     }
-  }
-  regfree(&cre);
+
+    debug1 << "Matched, pm[1] " << pm[1].rm_so << " to " << pm[1].rm_eo << endl;
+
+    std::string proc_str=std::string(basename.c_str()+pm[1].rm_so,
+                                     pm[1].rm_eo - pm[1].rm_so);
+    int proc_num=atoi(proc_str.c_str());
+
+    // only look for subdomains if it looks like we were given domain 0.
+    if( proc_num!=0 ) {
+      regfree(&cre);
+      return; // it's dflow, but not the first subdomain
+    }
+
+    debug1 << "Looks like proc 0: " << basename << endl;
+
+    debug1 << "About to loop through candidate filenames" << endl;
+    for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
+      int file_idx=0;
+      for(;file_idx<all_files.size();file_idx++) {
+        std::string basename_sub=FileFunctions::Basename(all_files[file_idx]);
+
+        if ( regexec(&cre, basename_sub.c_str(), 2, pm_sub, 0) != 0 )
+          continue;
+
+        // only okay if the everything except the domain is the same.
+        if( basename.substr(0,pm[1].rm_so) !=
+            basename_sub.substr(0,pm_sub[1].rm_so) )
+          continue;
+        if( basename.substr(pm[1].rm_eo,std::string::npos) !=
+            basename_sub.substr(pm_sub[1].rm_eo,std::string::npos) )
+          continue;
+
+        debug5 << "Maybe " << basename_sub << endl;
+
+        std::string proc_str=std::string(basename_sub.c_str()+pm[1].rm_so,
+                                         pm[1].rm_eo - pm[1].rm_so);
+        int proc_num=atoi(basename_sub.substr(pm_sub[1].rm_so,
+                                              pm_sub[1].rm_eo).c_str());
+        if( proc_num!= proc )
+          continue;
+
+        debug1 << "Yep! " << basename_sub << endl;
+        filenames.push_back(all_files[file_idx]);
+        break;
+      }
+      if( file_idx==all_files.size() ) {
+        regfree(&cre);
+        return; // all done.
+      }
+    }
+  } catch (bool status) {}
+
+
+  try { // SUNTANS partitioned output
+    // files like: Estuary_SUNTANS.nc.nc.0
+    if ( regcomp(&cre, ".*_SUNTANS\\.nc\\.nc\\.([0-9]+)$", REG_EXTENDED)) {
+      debug1 << "Couldn't compile pattern for finding suntans data files" << endl;
+      throw false;
+    } else {
+      debug1 << "Compiled the suntans regex" << endl;
+    }
+
+    // does the basename match?
+    if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 ) {
+      regfree(&cre);
+      throw false;
+    }
+
+    debug1 << "Matched, pm[1] " << pm[1].rm_so << " to " << pm[1].rm_eo << endl;
+
+    std::string proc_str=std::string(basename.c_str()+pm[1].rm_so,
+                                     pm[1].rm_eo - pm[1].rm_so);
+    int proc_num=atoi(proc_str.c_str());
+
+    // only look for subdomains if it looks like we were given domain 0.
+    if( proc_num!=0 ) {
+      regfree(&cre);
+      return; // it's dflow, but not the first subdomain
+    }
+
+    debug1 << "Looks like suntans proc 0: " << basename << endl;
+
+    debug1 << "About to loop through suntans candidate filenames" << endl;
+    for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
+      debug1 << "Checking for suntans proc " << proc << endl;
+      int file_idx=0;
+      for(;file_idx<all_files.size();file_idx++) {
+        std::string basename_sub=FileFunctions::Basename(all_files[file_idx]);
+        debug5 << "Try suntans for " << basename_sub << endl;
+
+        if ( regexec(&cre, basename_sub.c_str(), 2, pm_sub, 0) != 0 )
+          continue;
+
+        // only okay if the everything except the domain is the same.
+        if( basename.substr(0,pm[1].rm_so) !=
+            basename_sub.substr(0,pm_sub[1].rm_so) )
+          continue;
+
+        debug5 << "Maybe " << basename_sub << endl;
+
+        std::string proc_str=std::string(basename_sub.c_str()+pm[1].rm_so,
+                                         pm[1].rm_eo - pm[1].rm_so);
+        int proc_num=atoi(basename_sub.substr(pm_sub[1].rm_so,
+                                              pm_sub[1].rm_eo).c_str());
+        if( proc_num!= proc )
+          continue;
+
+        debug1 << "Yep! " << basename_sub << endl;
+        filenames.push_back(all_files[file_idx]);
+        break;
+      }
+      if( file_idx==all_files.size() ) {
+        regfree(&cre);
+        return; // all done.
+      }
+    }
+  } catch(bool status) { }
 }
 
 // How to handle avtDatabaseMetaData for top-level vs. 
