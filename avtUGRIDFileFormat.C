@@ -727,6 +727,8 @@ MeshInfo::ExtrudeTo3D(int timestate,
 {
   vtkDataArray *bedlevel=NULL;
   vtkDataArray *eta=NULL;
+  // for z layers, should the coordinate be negated to get positive:up?
+  bool flip_z=false;
 
   ////// Now basically extrude the surface mesh to prisms
   // bounded by the cell_divisions elevations 
@@ -815,8 +817,12 @@ MeshInfo::ExtrudeTo3D(int timestate,
         bedlevel=bed_node;
       }
     }
-  } else if (z_std_name=="ocean_zlevel_coordinate" ) {
-    debug1<< "Vertical coordinate indicates z-level coordinates" << endl;
+  } else if ( (z_std_name=="ocean_zlevel_coordinate") ||
+              (z_std_name=="ocean_z_coordinate") ) {
+    flip_z=false;
+    std::string positive=get_att_as_string(ncid,layer_z_var,"positive");
+    flip_z=(positive=="down");
+    debug1<< "Vertical coordinate indicates z-level coordinates, flip_z is " << flip_z << endl;
   }
 
   //-----  Extract vertical coordinate bounds -----
@@ -857,6 +863,10 @@ MeshInfo::ExtrudeTo3D(int timestate,
         double z_surf=eta->GetComponent(surf_point_id,0);
 
         a_point[2]= a_point[2]*(z_surf - z_bed) + z_bed;
+      }
+
+      if(flip_z) {
+        a_point[2] *= -1;
       }
     }
   }
