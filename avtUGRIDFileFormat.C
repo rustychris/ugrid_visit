@@ -727,16 +727,16 @@ MeshInfo::ExtrudeTo3D(int timestate,
 {
   vtkDataArray *bedlevel=NULL;
   vtkDataArray *eta=NULL;
-  // for z layers, should the coordinate be negated to get positive:up?
+  // for z layers, true if the coordinate should be negated to get positive:up
   bool flip_z=false;
 
   ////// Now basically extrude the surface mesh to prisms
-  // bounded by the cell_divisions elevations 
+  // bounded by the cell_divisions elevations
   activateTimestate(timestate);
 
-  // the new points 
+  // the new points
   // copy the z=0 points from the flat surface, and then repeat
-  // for each z-value 
+  // for each z-value
   int n_surf_points = surface->GetNumberOfPoints();
   int offset;
 
@@ -745,7 +745,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
   //   hopefully that has a bounds attribute, which points to a variable
   //   with dimensions nFlowMesh_layers,2, giving top and bottom elevation
   //   of the z-layers.
-  
+
   // so far we only support layer_z_var having a single dimension.
 
   int layer_var_ndim=-1;
@@ -753,7 +753,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
   if ( layer_var_ndim != 1 ) {
     debug1 << "Whoa - layer_var_ndim must be 1, but it was " << layer_var_ndim << endl;
     return NULL;
-  }  
+  }
 
   // z-coordinate or sigma terrain-following?
   std::string z_std_name=get_att_as_string(ncid,layer_z_var,"standard_name");
@@ -771,7 +771,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
       return NULL;
     }
   }
-  
+
   if ( z_std_name=="ocean_sigma_coordinate" ) {
     debug1<< "Vertical coordinate indicates sigma coordinates" << endl;
 
@@ -823,6 +823,8 @@ MeshInfo::ExtrudeTo3D(int timestate,
     std::string positive=get_att_as_string(ncid,layer_z_var,"positive");
     flip_z=(positive=="down");
     debug1<< "Vertical coordinate indicates z-level coordinates, flip_z is " << flip_z << endl;
+    // standardize this for other parts of this code
+    z_std_name="ocean_zlevel_coordinate";
   }
 
   //-----  Extract vertical coordinate bounds -----
@@ -845,7 +847,7 @@ MeshInfo::ExtrudeTo3D(int timestate,
     for(int k=0;k<n_layers+1;k++){
       // pointer to the point being defined
       a_point = ap_data + 3*(surf_point_id+k*n_surf_points);
-      
+
       a_point[0] = surf_point[0];
       a_point[1] = surf_point[1];
 
