@@ -1,27 +1,16 @@
-DFM output (nc output, not the UGRID option)
+Z-layer output:
+  are cell_kmin,cell_kmax useful here?
+  currently all columns assumed full.
+  need to be careful about cases in which cell_kmin/max are used
+   to control what data to read (i.e. dwaq), and cases where they
+   are used to control what data is present in the file but should
+   not be shown (suntans)
 
+  cell_kmin and kmax *are* used in ExtrudeTo3D.
 
-NetNode_z is working, displayed in 2D grid
-FlowElemDomain: okay
-numlimdt properly shows up with time.
-s1 good (surface)
-
-
-Mesh2D.LayCoord_cc: doesn't include proper vertical.
-
-
-
-sa1: No go.  Error is that zonal variable has 0 values, should have 33830.
-
-
-Dealing with sigma coordinates: 
-  Does it make sense for 3D MeshInfo with sigma coordinates to retain a reference (?!)
-  to eta and bedlevel VarInfo?
-
-  Can't really hold on to reference to variable.
-  But MeshInfo (and VarInfo for that matter) could have a reference/pointer back to 
-  avtUGRIDFileFormat
-
+  added a flag to say whether cell_kmin/kmax are needed (vertical_is_subset)
+  easiest way to test for those would be to find a 3D variable with
+    a fillvalue, and then just search for the fillvalue.
 
 TODO:
 

@@ -142,6 +142,7 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
   varid=mesh_var;
   layer_z_var=z_var;
   active_timestate=-1;
+  valid_3d_cell_var="";
 
   nc_inq_varname(ncid,varid,var_name);
   if ( layer_z_var < 0 ) {
@@ -187,6 +188,10 @@ MeshInfo::MeshInfo(int _ncid, int mesh_var,int z_var)
   if(layer_z_var<0) {
     n_cells3d=n_cells2d;
     debug1 << "MeshInfo constructor: grid is 2D, so set n_cells3d=n_cells2d" << endl;
+  } else {
+    // Scan for a variable which might help us identify valid cells.
+    debug1 << "MeshInfo constructor: grid is 3D. Can we find a data variable for valid layers?"
+           << endl;
   }
 
   std::string node_coords=get_att_as_string(ncid,varid,"node_coordinates");
@@ -423,8 +428,8 @@ void
 MeshInfo::activateTimestate(int timestate) {
   // get some 3D mesh info for a given time step
 
-  if ( (active_timestate == timestate) || 
-       (layer_dim<0) ) 
+  if ( (active_timestate == timestate) ||
+       (layer_dim<0) )
     return;
 
   if ( cell_dim < 0 ) {
@@ -433,11 +438,11 @@ MeshInfo::activateTimestate(int timestate) {
   }
 
   n_cells3d=0; // to be incremented below
-  
+
   if(cell_kmin.size() != n_cells2d )
     cell_kmin.resize(n_cells2d,-1);
 
-  if(cell_kmax.size() != n_cells2d ) 
+  if(cell_kmax.size() != n_cells2d )
     cell_kmax.resize(n_cells2d,-1);
 
   // for transcribed delwaq output, typically have
@@ -455,7 +460,7 @@ MeshInfo::activateTimestate(int timestate) {
   //   for(k=0;
   //       (k<n_layers) && (volumes[cell2d*n_layers+k] <= 0);
   //       k++) ;
-  // 
+  //
   //   cell_kmin[cell2d]=k;
   //   for(; (k<n_layers) && ( volumes[cell2d*n_layers+k]==volumes[cell2d*n_layers+k] );
   //       k++) ;
@@ -463,14 +468,40 @@ MeshInfo::activateTimestate(int timestate) {
   //   ncells_3d += (cell_kmax[cell2d] - cell_kmin[cell2d]);
   // }
 
-  // new DFM code - sigma layers, so they're all full:
-  for(int i=0;i<n_cells2d;i++){
-    cell_kmax[i]=n_layers;
-    cell_kmin[i]=0;
-    n_cells3d += (cell_kmax[i] - cell_kmin[i]);
+  vertical_is_subset=false; // default to full layers
+  // currently only know how to filter per-cell validity
+  if( (valid_3d_cell_var!="") ) {
+    debug1 << "using valid_3d_var " << valid_3d_cell_var
+           << " to choose cell limits" << endl;
+    float *valid_data=parent->read_cell_z_full(valid_3d_cell_var,timestate);
+    for(int i=0;i<n_cells2d;i++){
+      // find the first valid cell:
+      int k;
+      for(k=0;k<n_layers;k++) {
+        // hopefully got the order right here
+        if ( valid_data[i*n_layers+k]!=invalid_3d_value )
+          break;
+      }
+      cell_kmin[i]=k;// could be n_layers, indicating dry
+      for(k=n_layers; k>cell_kmin[i]; k-- ) {
+        // test -1 since this is an exclusive ending index
+        if ( valid_data[i*n_layers+(k-1)]!=invalid_3d_value )
+          break;
+      }
+      cell_kmax[i]=k;
+      n_cells3d += (cell_kmax[i] - cell_kmin[i]);
+    }
+    vertical_is_subset=true;
+    delete[] valid_data;
+  } else {
+    for(int i=0;i<n_cells2d;i++){
+      cell_kmax[i]=n_layers;
+      cell_kmin[i]=0;
+      n_cells3d += (cell_kmax[i] - cell_kmin[i]);
+    }
   }
-  debug1 << "activateTimestate timestate=" << timestate 
-         << " cell_kmax[0]=" << cell_kmax[0] 
+  debug1 << "activateTimestate timestate=" << timestate
+         << " cell_kmax[0]=" << cell_kmax[0]
          << " n_cells3d=" << n_cells3d << endl;
 
   active_timestate=timestate;
@@ -876,24 +907,24 @@ MeshInfo::ExtrudeTo3D(int timestate,
   debug1 << "Done creating 3D points" << endl;
 
   vtkUnstructuredGrid *full_mesh = vtkUnstructuredGrid::New();
-   
+
   // Copy the cell structure, extruding through depth
   vtkIdType surf_cell_npoints;
   vtkIdType *surf_cell_point_ids;
-  
+
   // 2*MAX_SIDES: top and bottom points, up to a hexagonal prism, or larger
   vtkIdType new_cell_point_ids[2*MAX_SIDES];
-  
+
   // full_cell2valid provides a mapping of expected cell index to
   //  actual cell index;
-  
+
   // settings['stairstep']=0 ->  The bottom of the bottom valid cell is defined
   //   by the voronoi center depth
   //                      =1 ->  Round to next z-level (deeper)
   // It's going to be a real pain to do partial depths, because it
   //  upsets the mapping of points to different depths (bottom points
   //   can't be reused, and the numbering gets all funky)
-  
+
   // Fetch the depth values in order to evaluate the bottom cells
   // this is a little different for the ugrid stuff.
   //  probably have node-centered depth
@@ -904,29 +935,29 @@ MeshInfo::ExtrudeTo3D(int timestate,
   //  there's the further consideration that really we want bounds, too,
   //  so it would be [time,cell,layer,d2]
   // regardless, this needs to be time-dependent.
-  
-  // the most immediate question is how to figure out how many 
+
+  // the most immediate question is how to figure out how many
   // cells are in each water column.
-  
+
   // vtkFloatArray *cell_depths =(vtkFloatArray *)GetVarBathymetry();
   // float *bath_data = cell_depths->GetPointer(0);
-  
+
   full_mesh->Allocate();
-   
+
   int expected_cell_id=0;
   int real_cell_id=0;
-     
+
   for(int surf_cell_id=0 ;
       surf_cell_id<n_cells2d ;
       surf_cell_id++ ) {
     surface->GetCellPoints(surf_cell_id,
                            surf_cell_npoints,surf_cell_point_ids);
-  
+
     if( surf_cell_npoints > MAX_SIDES ) {
       debug1 << "Cell has too many points - truncating! " << surf_cell_npoints << " to " << MAX_SIDES << endl;
       surf_cell_npoints=MAX_SIDES;
     }
-   
+
     int k; // index into vertical cells
 
     if( surf_cell_id == 0 ) {
@@ -938,42 +969,42 @@ MeshInfo::ExtrudeTo3D(int timestate,
     for(k=cell_kmin[surf_cell_id];
         k<cell_kmax[surf_cell_id];
         k++) {
-      
+
       /// The Visit manual shows this as 0-1-2 being one triangular
       // face with outward-facing normal, and 3-4-5 being the other
       // end with inward-facing normal (where the normal is defined
       // as outward on CCW ordered vertices)
       // if this really angers Visit, may have to test ordering here
       // and reverse top/bottom if vertices are in wrong order.
-  
+
       // but the general polyhedron wants entirely outward facing
       // normals.
-      // and the illustration of thw VTK_HEXAHEDRON 
+      // and the illustration of thw VTK_HEXAHEDRON
       // shows 0,1,2,3 having an inward facing normal.
-      
+
       // at some point we might add new bottom points to allow
       // for partial cell depths, but for now just do stair-stepping
-  
+
       // tricky loop modification to order the nodes in the right way
       // for the different cell types.
       if( surf_cell_npoints==3 || surf_cell_npoints>6 )
         offset=0;
       else
         offset=surf_cell_npoints;
-      
+
       // the upper level:
       for (int vertex=0;vertex<surf_cell_npoints;vertex++) {
         new_cell_point_ids[vertex+offset] = k*n_surf_points + surf_cell_point_ids[vertex];
       }
-  
+
       offset=surf_cell_npoints-offset;
-      
+
       // the lower level:
       for (int vertex=0;vertex<surf_cell_npoints;vertex++) {
         new_cell_point_ids[vertex+offset] = (k+1)*n_surf_points + 
           surf_cell_point_ids[vertex];
       }
-        
+
       // Insert the cell into the mesh.
       if ( surf_cell_npoints==3 ) {
         full_mesh->InsertNextCell(VTK_WEDGE, 6, new_cell_point_ids);
@@ -988,33 +1019,23 @@ MeshInfo::ExtrudeTo3D(int timestate,
         insertNPrism(full_mesh,surf_cell_npoints,new_cell_point_ids);
         // full_mesh->InsertNextCell(VTK_HEXAGONAL_PRISM, 12, new_cell_point_ids);
       }
-      
-      // update the mapping of cell ids:
-      // the order of the data file is still a bit unclear, so hopefully
-      // this is the same as in the data file...
-      // as long as cell_kmin,cell_kmax are correct, there's not a compelling
-      // reason to additionally store this mapping, afaict.
-
-      // int expected_id = surf_cell_id + k*n_cells2d;
-      // full_cell2valid[ expected_id ] = real_cell_id;
-      // real_cell_id++;
     }
   }
   debug1 << "Done constructing 3D cells" << endl;
-  
+
   // hopefully it's okay to set the points here, *after* defining the cells
   full_mesh->SetPoints(all_points);
   all_points->Delete();
-  // surface->Delete(); // caller does this now.
-   
+  // caller will call surface->Delete()
+
   // this causes a leak.
-  // full_mesh->Register(NULL); 
+  // full_mesh->Register(NULL);
 
   // this is the counterpart to outv->Register() call in ZoneToNode2D, and
   // successfully cleans up the leak without introducing invalid reads
   if(eta!=NULL) eta->Delete();
   if(bedlevel!=NULL) bedlevel->Delete();
-  
+
   debug1 << "Return 3D mesh" << endl;
   return full_mesh;
 }
@@ -1073,11 +1094,11 @@ avtUGRIDSingle::avtUGRIDSingle(const char *filename,int _domain)
   // INITIALIZE DATA MEMBERS
   int retval;
   domain=_domain;
-  
+
   if ( nc_open(filename, NC_NOWRITE, &ncid) ) {
     debug1 << "Failed to open " << filename << endl;
     return;
-  } 
+  }
   debug1 << "UGRID: opened " << filename << endl;
 
   if ( nc_inq_dimid(ncid,"time", &time_dim) ) {
@@ -1259,7 +1280,7 @@ avtUGRIDSingle::FreeUpResources(void)
 //  Creation:   Sat Mar 5 18:27:45 PST 2016
 //
 // ****************************************************************************
-void avtUGRIDSingle::initialize_metadata(void) 
+void avtUGRIDSingle::initialize_metadata(void)
 {
   std::string ugrid_mesh=default_ugrid_mesh;
 
@@ -1274,7 +1295,6 @@ void avtUGRIDSingle::initialize_metadata(void)
   debug1 << "UGRID: Scanning variable definitions" << endl;
 
   char var_scan[NC_MAX_NAME];
-  // char dim_name[NC_MAX_NAME];
 
   for(int var_num=0;var_num<nvars;var_num++) {
     if ( nc_inq_varname(ncid,var_num,var_scan) ) {
@@ -1287,7 +1307,7 @@ void avtUGRIDSingle::initialize_metadata(void)
     // read dimensions - if it has either cell/node and a layer dimension, assign to
     // 3D mesh.
     // if just cell/node, put it on the 2d mesh.
-    
+
     VarInfo var_inf(var_scan);
     var_inf.var_id=var_num;
 
@@ -1307,6 +1327,8 @@ void avtUGRIDSingle::initialize_metadata(void)
 
     debug1 << "initialize_metadata: var '" << var_inf.name << "' => mesh " 
            << var_inf.mesh_name << endl;
+    // is this a good place to deal with 3D valid checking?
+    // or in setMeshInfo ?
   }
 
   // For any meshes that were found along the way, create a .domain variable
@@ -1316,7 +1338,7 @@ void avtUGRIDSingle::initialize_metadata(void)
        it!=mesh_table.end();
        ++it) {
     std::string name=it->second.name + ".domain";
-      
+
     VarInfo var_inf(name);
     var_inf.pseudo=VarInfo::P_DOMAIN;
     var_inf.ncid=-1; // no netcdf variable associated
@@ -1330,7 +1352,7 @@ void avtUGRIDSingle::initialize_metadata(void)
     if ( it->second.layer_dim >= 0)
       var_inf.layer_dimi=1;
     var_inf.mesh_name=it->second.name;
-      
+
     var_table[name]=var_inf;
     debug1 << "initialize_metadata: added mesh domain var " << var_inf.name << endl;
   }
@@ -1374,7 +1396,7 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
       smd->hasUnits=true;
       smd->units=units;
     }
-    
+
     smd->meshName=mesh_table[var_inf.mesh_name].name;
 
     if ( var_inf.cell_dimi>=0 ) 
@@ -1389,12 +1411,12 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
 
     md->Add(smd);
   }
-    
+
   // We should have all of the meshes now - any 2D meshes defined
   // by a cf_role='mesh_topology' attribute, plus the 3D meshes
   // inferred from variable dimensions
   avtMeshType mt = AVT_UNSTRUCTURED_MESH;
-  
+
   for (std::map<std::string,MeshInfo>::iterator it=mesh_table.begin();
        it!=mesh_table.end();
        ++it) {
@@ -1411,7 +1433,7 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
     // AddMeshToMetaData(md,it->second.name+".nodes",AVT_POINT_MESH,NULL,1,0,2,0);
 
   }
-  
+
   // CODE TO ADD A VECTOR VARIABLE
   //
   // string mesh_for_this_var = meshname; // ??? -- could be multiple meshes
@@ -1447,14 +1469,14 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
       var_inf.time_dim=time_dim;
       continue;
     }
-    
+
     // read dimension name for some kludgy tests below
     if ( nc_inq_dimname(ncid,var_inf.dims[d],dim_name) ) {
       debug1 << "  Failed to read name of dimension" << endl;
       return false;
     }
     bool found_dim_match=false;
-    
+
     for (std::map<std::string,MeshInfo>::iterator it=mesh_table.begin();
          it!=mesh_table.end();
          ++it) {
@@ -1471,14 +1493,14 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
       }
     }
     if( found_dim_match ) continue;
-    
+
     // extra checks based on the name. KLUDGE for DFM
     if ( std::string(dim_name) == "nFlowElem" ) {
       var_inf.cell_dimi=d;
       var_inf.mesh_name=default_ugrid_mesh;
       continue;
     }
-    
+
     // Is this a vertical layer / level dimension?
     // how do we infer what is a layer dimension?
     //   could scan the variables, looking for variables
@@ -1506,13 +1528,27 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
     debug1 << "  setMeshInfo(" << var_inf.name << "): no 2D grid identified" << endl;
     return false;
   }
-  
+
   if ( z_var >= 0 ) {
     debug1<<"  Emerged, and variable appears to be 3D." << endl;
     debug1<<"  Current mesh name is " << var_inf.mesh_name << endl;
     var_inf.mesh_name=create_3d_mesh(var_inf.mesh_name,
                                      var_inf.dims[var_inf.layer_dimi],
                                      z_var);
+    // see if this variable is a good candidate for testing 3D data validity
+    // only use 3D, time-varying variables, and for now only cell-centered
+    double fill_value;
+    if( (var_inf.time_dimi>=0) && (var_inf.cell_dimi>=0) &&
+        !(nc_get_att_double(ncid,var_inf.var_id,"_FillValue",&fill_value) )) {
+      MeshInfo &mesh=mesh_table[var_inf.mesh_name];
+      if( mesh.valid_3d_cell_var=="" ) {
+        debug1 << "  this looks like a good candidate for a 3D valid data variables"
+               << " with fill value of " << fill_value
+               << endl;
+        mesh.valid_3d_cell_var=var_inf.name;
+        mesh.invalid_3d_value=fill_value;
+      }
+    }
   }
 
   debug1 << "End of setMeshInfo, and variable has mesh name " << var_inf.mesh_name << endl;
@@ -1530,15 +1566,22 @@ avtUGRIDSingle::create_3d_mesh(std::string mesh2d,int z_dim,int z_var) {
   debug1 << "Combining 2D mesh " << mesh2d << " with vertical coordinate " << z_var_name << endl;
   debug1 << "  Result is " << result << endl;
 
-  mesh_table[result] = MeshInfo(ncid,mesh_table[mesh2d].varid,z_var);
-  MeshInfo &mesh3d=mesh_table[result];
-  mesh3d.parent=this;
-  mesh3d.layer_dim = z_dim;
-  mesh3d.layer_z_var = z_var;
+  // Used to create lots of these -- maybe better to replace only when
+  // necessary?
+  if( mesh_table.count(result) ) {
+    debug1 << "  that mesh already exists in the table" << endl;
+  } else {
+    debug1 << "  creating that mesh" << endl;
+    mesh_table[result] = MeshInfo(ncid,mesh_table[mesh2d].varid,z_var);
+    MeshInfo &mesh3d=mesh_table[result];
+    mesh3d.parent=this;
+    mesh3d.layer_dim = z_dim;
+    mesh3d.layer_z_var = z_var;
 
-  if( nc_inq_dimlen(ncid,z_dim,&(mesh3d.n_layers)) ) {
-    debug1 << "  failed to find layer dimension.  will punt with n_layers=1" << endl;
-    mesh3d.n_layers=1;
+    if( nc_inq_dimlen(ncid,z_dim,&(mesh3d.n_layers)) ) {
+      debug1 << "  failed to find layer dimension.  will punt with n_layers=1" << endl;
+      mesh3d.n_layers=1;
+    }
   }
 
   return result;
@@ -1768,7 +1811,7 @@ float *VarInfo::read_cell_z_at_time(int timestate, MeshInfo &mesh) {
   if( time_dimi>=0 ) {
     startp[time_dimi] = timestate;
     countp[time_dimi]=1;
-  } 
+  }
 
   debug1 << "read_cell_z_at_time: time_dimi="<< time_dimi << endl;
   debug1 << "                     cell_dimi="<< cell_dimi << endl;
@@ -1793,10 +1836,6 @@ float *VarInfo::read_cell_z_at_time(int timestate, MeshInfo &mesh) {
     debug1 << "Expected var name " << name << " and queried to get " << var_scan << endl;
   }
 
-  // this is failing, but not clear why...
-  // maybe double check to make sure that var_id is correct?
-  // could also print startp and countp, and query number of dimensions?
-
   if( nc_get_vara_float(ncid,var_id,startp,countp,result) ) {
     debug1 << "Failed to read 3D float array for " << name << endl;
     delete[] result;
@@ -1820,7 +1859,7 @@ float *VarInfo::read_cell_z_at_time(int timestate, MeshInfo &mesh) {
     result=trans_result;
     debug1 << "Done with transpose" << endl;
   }
-  
+
   return result;
 }
 
@@ -1859,10 +1898,10 @@ avtUGRIDSingle::GetVar(int timestate, const char *varname)
 
   if( vi.name == "" ) {
     debug1 << "Case-mismatch in variable names?" << endl;
-    
+
     // Iterate and look for case-insensitive matches
     std::map<std::string,VarInfo>::iterator it = var_table.begin();
- 
+
     // Iterate over the map using Iterator till end.
     while (it != var_table.end()) {
       // Accessing KEY from element pointed by it.
@@ -1926,8 +1965,22 @@ avtUGRIDSingle::GetVar3D(int timestate,VarInfo &vi)
     } else {
       full=vi.read_cell_z_at_time(timestate,mesh);
       // almost certainly some quick shortcut for this.
-      for(int i=0;i<mesh.n_cells3d;i++) {
-        rv->SetTuple1(i,full[i]);
+      if( !mesh.vertical_is_subset) {
+        // copy everything over
+        for(int i=0;i<mesh.n_cells3d;i++) {
+          rv->SetTuple1(i,full[i]);
+        }
+      } else {
+        int cell_count=0;
+        for(int i=0;i<mesh.n_cells2d;i++) {
+          for(int k=mesh.cell_kmin[i];k<mesh.cell_kmax[i];k++) {
+            rv->SetTuple1(cell_count,full[i*mesh.n_layers+k]);
+            cell_count++;
+          }
+        }
+        debug1 << "Pared down " << mesh.n_cells2d*mesh.n_layers
+               << " 3D cells down to " << mesh.n_cells2d << " or "
+               << cell_count << endl;
       }
       delete[] full;
     }
