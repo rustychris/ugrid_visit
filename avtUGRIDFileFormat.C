@@ -1356,6 +1356,10 @@ void avtUGRIDSingle::initialize_metadata(void)
     var_table[name]=var_inf;
     debug1 << "initialize_metadata: added mesh domain var " << var_inf.name << endl;
   }
+
+  // TODO:
+  // in the above loop, also add a proc-local cell index variable.
+  // and for any 3D meshes, add a pseudo-variable for layer k
 }
 
 // ****************************************************************************
@@ -1448,8 +1452,40 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
   //
   // AddVectorVarToMetaData(md, varname, mesh_for_this_var, cent,vector_dim);
   //
+
+  // if an incoming variable has CF metadata that it's bed elevation,
+  //   add a z_bed expression
+  // similar expressions for vel magnitude, vector velocity
+  initialize_expressions(md);
 }
 
+void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
+  // Add a mesh called "mesh" to the metadata object.
+  // Add scalars to the metadata object.
+  // Add expression definitions to the metadata object.
+
+  // hardcoded suntans variables
+  Expression *e0 = new Expression;
+  e0->SetName("z_bed");
+  e0->SetDefinition("-dv");
+  e0->SetType(Expression::ScalarMeshVar);
+  e0->SetHidden(false);
+  md->AddExpression(e0);
+
+  Expression *e1 = new Expression;
+  e1->SetName("vel_2d");
+  e1->SetDefinition("{uc,vc,0*uc}");
+  e1->SetType(Expression::VectorMeshVar);
+  e1->SetHidden(false);
+  md->AddExpression(e1);
+
+  Expression *e2 = new Expression;
+  e2->SetName("speed");
+  e2->SetDefinition("sqrt(uc^2+vc^2)");
+  e2->SetType(Expression::ScalarMeshVar);
+  e2->SetHidden(false);
+  md->AddExpression(e2);
+}
 
 // With spatial_dim_names populated and sorted, figure out which 
 // mesh to give this thing

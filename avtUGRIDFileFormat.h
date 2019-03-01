@@ -182,7 +182,8 @@ class avtUGRIDSingle : public avtMTSDFileFormat
   vtkPoints *GetNodes(const std::string);
 
   void initialize_metadata(void);
-
+  void initialize_expressions(avtDatabaseMetaData *md);
+  
   // DATA MEMBERS
 
   virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
