@@ -1647,6 +1647,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
   int ndims;
   int dims[MAX_DIMS];
   std::string positive;
+  std::string std_name;
 
   for(int var_num=0;var_num<nvars;var_num++) {
     debug5 << " Is variable " << var_num << " a vertical coordinate for dim " << dim << endl;
@@ -1665,7 +1666,15 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
     if( d==ndims ) 
       continue ; // no match
 
-    positive = get_att_as_string(ncid,var_num,"positive");
+    std_name = get_att_as_string(ncid,var_num,"standard_name");
+    if ( std_name == "altitude" ) {
+      // altitude implies positive=up
+      debug5 << "  Variable standard_name = 'altitude'" << endl;
+      positive="up";
+    } else {
+      positive = get_att_as_string(ncid,var_num,"positive");
+    }
+    
     if ( positive == "" ) {
       debug5 << "  Variable does not have positive attribute" << endl;
       continue; // not a vertical coordiante
