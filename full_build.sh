@@ -4,23 +4,8 @@
 # was compiled with /usr/bin/{gcc,g++} and
 # 2.13.0 was compiled with /usr/bin/clang{,++}
 
-# Adjust for non-standard installation locations
-BIN=/Applications/VisIt.app/Contents/Resources/bin
-
-# High Sierra and VisIt 2.10.2:
-# setting nothing will automatically pick up
-# a clang which does not cause a warning from
-# cmake, but winds up with undefined references to ReadAndProcessDirectory.
-# This is discussed in issue #1, and relates to the choice of std c++ library in
-# newer Mac OS.
-
-export CC=/usr/bin/gcc
-export CXX=/usr/bin/g++
-
 # #Linux
-# BIN=$HOME/software/visit/bin
-# export CC=gcc
-# export CXX=g++
+BIN=$HOME/software/visit3_1_3.linux-x86_64/bin/
 
 rm -r CMake* Makefile cmake_install.cmake
 
@@ -32,5 +17,7 @@ $BIN/xml2cmake -clobber ugrid.xml
 
 # This is related to clang using libc++ (LLVM, with __1:: inline
 # namespace) vs. libstdc++ (GNU, no inline namespace)
-cmake -DCMAKE_CXX_FLAGS="-stdlib=libstdc++" . && make VERBOSE=1
+# cmake -DCMAKE_CXX_FLAGS="-stdlib=libstdc++" . && make VERBOSE=1
+cmake . && make VERBOSE=1
+
 

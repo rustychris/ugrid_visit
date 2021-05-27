@@ -7,7 +7,10 @@
       ${NETCDF_LIBRARY_DIR}
     </LDFLAGS>
     <LIBS>
-      ${NETCDF_LIB} vtkCommonExecutionModel-6.1
+      <!-- at some point in the past this had vtkCommonExecutionModel-6.1
+           but now with 3.1.3, the version appears to get appended
+           automatically-->
+      ${NETCDF_LIB} vtkCommonExecutionModel
     </LIBS>
     <FilePatterns>
       *.nc
