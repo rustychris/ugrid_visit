@@ -1103,11 +1103,13 @@ avtUGRIDSingle::avtUGRIDSingle(const char *filename,int _domain)
 
   if ( nc_inq_dimid(ncid,"time", &time_dim) ) {
     debug1 << "Failed to read time dimensions" << endl;
-  }
-
-  if ( nc_inq_varid(ncid, "time", &time_var) ) {
-    debug1 << "Couldn't read time variable id" << endl;
-    return;
+    time_dim=-1;
+    time_var=-1;
+  } else {
+    if ( nc_inq_varid(ncid, "time", &time_var) ) {
+      debug1 << "Couldn't read time variable id" << endl;
+      time_var=-1;
+    }
   }
 
   cell_kmin=cell_kmax=NULL;
@@ -1182,9 +1184,12 @@ avtUGRIDSingle::GetNTimesteps(void)
 {
   size_t length;
   char recname[NC_MAX_NAME+1];
-  nc_inq_dim(ncid, time_dim, recname, &length);
-
-  return length;
+  if (time_dim>=0) {
+    nc_inq_dim(ncid, time_dim, recname, &length);
+    return length;
+  } else {
+    return 1; // maybe that gets around the invalid index error?
+  }
 }
 
 void avtUGRIDSingle::GetCycles(std::vector<int> &cycles)
@@ -1208,20 +1213,25 @@ void avtUGRIDSingle::GetTimes(std::vector<double> &times)
   size_t startp[1]; // safely assume that time is one-dimensional
   size_t countp[1];
 
+  if ( time_var <0 ) {
+    times.push_back(0.0); // put in a fake 0 timestep
+    return;
+  }
+  
   countp[0]=GetNTimesteps();
   startp[0]=0;
-
+    
   double *result=new double[countp[0]];
-
+    
   if( nc_get_vara_double(ncid,time_var,startp,countp,result) ) {
     debug1 << "Failed to read double array for time " << endl;
     delete[] result;
   }
-
+  
   double to_days=1;
-
+  
   std::string units=get_att_as_string(ncid,time_var,"units");
-
+  
   if ( units.find("second")== 0) {
     to_days=1./86400;
   } else if ( units.find("minute")==0 ) {
@@ -2208,7 +2218,16 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
     // This is the name of the run, the proc, but then a timestamp
     // wy2013c_0000_20120801_000000_map.nc
     // The greediness is making that more difficult.
-    if ( regcomp(&cre, ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$", REG_EXTENDED)) {
+
+    // MPI output from schism is not too different:
+    // schout_0000_1.nc
+    // where the %04d is domain, and _1 is sequence.
+    if ( regcomp(&cre,
+                 // Specific to DFM
+                 // ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$",
+                 // Should work for DFM and SCHISM, but maybe be too lenient.
+                 ".*_([0-9][0-9][0-9][0-9])_.*\\.nc$",
+                 REG_EXTENDED)) {
       debug1 << "Couldn't compile pattern for finding raw data files" << endl;
       throw false;
     } else {
