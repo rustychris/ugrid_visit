@@ -5,7 +5,8 @@
 # 2.13.0 was compiled with /usr/bin/clang{,++}
 
 # #Linux
-BIN=$HOME/software/visit3_1_3.linux-x86_64/bin/
+# BIN=$HOME/software/visit2_10_3_local/bin/
+BIN=$HOME/software/visit3.2.1/bin
 
 rm -r CMake* Makefile cmake_install.cmake
 
