@@ -1564,8 +1564,8 @@ void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
   }
 
   // For any positive:down variable, make a copy with positive:up
-  std::map<std::string, VarInfo>::iterator it = var_table.begin();
-  while (it != var_table.end())
+  std::map<std::string, VarInfo>::iterator it;
+  for(it = var_table.begin() ; it != var_table.end() ; it++)
   {
     std::string key = std::string(it->first);
     VarInfo &var_info = it->second;
