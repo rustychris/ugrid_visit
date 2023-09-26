@@ -1075,7 +1075,6 @@ VarInfo::VarInfo(const VarInfo &a)
   ncid=a.ncid;
 }
 
-
 // ****************************************************************************
 //  Method: avtUGRIDSingle constructor
 //
@@ -1096,17 +1095,6 @@ avtUGRIDSingle::avtUGRIDSingle(const char *filename,int _domain)
     return;
   }
   debug1 << "UGRID: opened " << filename << endl;
-
-  if ( nc_inq_dimid(ncid,"time", &time_dim) ) {
-    debug1 << "Failed to read time dimensions" << endl;
-    time_dim=-1;
-    time_var=-1;
-  } else {
-    if ( nc_inq_varid(ncid, "time", &time_var) ) {
-      debug1 << "Couldn't read time variable id" << endl;
-      time_var=-1;
-    }
-  }
 
   cell_kmin=cell_kmax=NULL;
   active_timestate=-1;
@@ -1274,6 +1262,61 @@ avtUGRIDSingle::FreeUpResources(void)
 }
 
 
+
+void avtUGRIDSingle::set_time_info()
+{
+  time_dim=time_var=-1;
+
+  // Loop through variables in file trying to find time
+  int nvars;
+  if ( nc_inq_nvars(ncid,&nvars) ) {
+    debug1 << "Failed. How could nc_inq_nvars fail??" << endl;
+    return;
+  }
+
+  debug1 << "UGRID: Scanning for time variable" << endl;
+
+  char var_scan[NC_MAX_NAME];
+
+  // Find time variable. No notion of multiple time variables!
+  for(int var_num=0;var_num<nvars;var_num++) {
+    if ( nc_inq_varname(ncid,var_num,var_scan) ) {
+      debug1 << "Failed to read name of variable at index " << var_num << endl;
+      continue;
+    }
+    debug1 << "Variable: "<<var_scan << " [" << var_num << "]" <<endl;
+  
+    if ( var_scan == "time" ) {
+      time_var = var_num;
+      debug1 << "  Identified time variable " << var_scan << " based on name" << endl;
+      break;
+    } else {
+      std::string standard_name = get_att_as_string(ncid,var_num,"standard_name");
+      if ( standard_name == "time" ) {
+        time_var = var_num;
+        debug1 << "  Identified time variable " << var_scan << " based on standard_name" << endl;
+        break;
+      }
+    }
+  }
+
+  // Time dimension
+  if( time_var >= 0 ) {
+    int time_ndims=-1;
+    if ( nc_inq_varndims(ncid,time_var,&time_ndims) ) {
+      debug1 << "  Failed to query number of dimensions for time var" << endl;
+    } else if (time_ndims==1 && !nc_inq_vardimid(ncid,time_var,&time_dim) ) {
+      debug1 << "  Found time dimension via time variable" << endl;
+    }
+  } else {
+    // Is there a dimension just named 'time' ?
+    if ( !nc_inq_dimid(ncid,"time",&time_dim) ) 
+      debug1 << "Set time dimension base on name" << endl;
+    else
+      debug1 << "Failed to find a time dimension" << endl;
+  }
+}
+
 // ****************************************************************************
 //  Method: avtUGRIDSingle::initialize_metadata
 //
@@ -1291,6 +1334,9 @@ void avtUGRIDSingle::initialize_metadata(void)
 {
   std::string ugrid_mesh=default_ugrid_mesh;
 
+  // setMeshInfo needs this.
+  set_time_info();
+  
   // Loop through variables in file, trying to match them to grids
   // and register with metadata
   int nvars;
@@ -1320,23 +1366,24 @@ void avtUGRIDSingle::initialize_metadata(void)
 
     if( nc_inq_varndims(ncid,var_num,&(var_inf.ndims)) || 
         nc_inq_vardimid(ncid,var_num,var_inf.dims) ) {
-      debug1 << "Failed.  How did that happen?" << endl;
+      debug1 << "  Failed.  How did that happen?" << endl;
       continue;
     }
 
     var_inf.ncid=ncid;
 
     // in the future, this will create the mesh on the fly...
-    if ( !setMeshInfo(var_inf) )
+    if ( !setMeshInfo(var_inf) ) {
       continue;
-
+    }
     var_table[var_scan] = var_inf;
 
-    debug1 << "initialize_metadata: var '" << var_inf.name << "' => mesh " 
+    debug1 << "  initialize_metadata: var '" << var_inf.name << "' => mesh " 
            << var_inf.mesh_name << endl;
     // is this a good place to deal with 3D valid checking?
     // or in setMeshInfo ?
   }
+
 
   // For any meshes that were found along the way, create a .domain variable
   // There does not appear to be function in VisIt expressions which returns
@@ -1489,26 +1536,50 @@ void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
   // Add expression definitions to the metadata object.
 
   // hardcoded suntans variables
-  Expression *e0 = new Expression;
-  e0->SetName("z_bed");
-  e0->SetDefinition("-dv");
-  e0->SetType(Expression::ScalarMeshVar);
-  e0->SetHidden(false);
-  md->AddExpression(e0);
+  if (var_table.count("dv") > 0)
+  {
+    Expression *e0 = new Expression;
+    e0->SetName("z_bed");
+    e0->SetDefinition("-dv");
+    e0->SetType(Expression::ScalarMeshVar);
+    e0->SetHidden(false);
+    md->AddExpression(e0);
+  }
 
-  Expression *e1 = new Expression;
-  e1->SetName("vel_2d");
-  e1->SetDefinition("{uc,vc,0*uc}");
-  e1->SetType(Expression::VectorMeshVar);
-  e1->SetHidden(false);
-  md->AddExpression(e1);
+  if (var_table.count("uc") > 0)
+  {
+    Expression *e1 = new Expression;
+    e1->SetName("vel_2d");
+    e1->SetDefinition("{uc,vc,0*uc}");
+    e1->SetType(Expression::VectorMeshVar);
+    e1->SetHidden(false);
+    md->AddExpression(e1);
 
-  Expression *e2 = new Expression;
-  e2->SetName("speed");
-  e2->SetDefinition("sqrt(uc^2+vc^2)");
-  e2->SetType(Expression::ScalarMeshVar);
-  e2->SetHidden(false);
-  md->AddExpression(e2);
+    Expression *e2 = new Expression;
+    e2->SetName("speed");
+    e2->SetDefinition("sqrt(uc^2+vc^2)");
+    e2->SetType(Expression::ScalarMeshVar);
+    e2->SetHidden(false);
+    md->AddExpression(e2);
+  }
+
+  // For any positive:down variable, make a copy with positive:up
+  std::map<std::string, VarInfo>::iterator it = var_table.begin();
+  while (it != var_table.end())
+  {
+    std::string key = std::string(it->first);
+    VarInfo &var_info = it->second;
+    std::string positive = get_att_as_string(ncid, var_info.var_id, "positive");
+    if (positive == "down")
+    {
+      Expression *flip = new Expression;
+      flip->SetName(var_info.name + "_up");
+      flip->SetDefinition("-" + var_info.name);
+      flip->SetType(Expression::ScalarMeshVar);
+      flip->SetHidden(false);
+      md->AddExpression(flip);
+    }
+  }
 }
 
 // With spatial_dim_names populated and sorted, figure out which 
@@ -1526,6 +1597,8 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
     // cell or node dimension:
     if( var_inf.dims[d] == time_dim ) {
       var_inf.time_dimi=d;
+      // Currently everyone has the same time dimension, and that is mostly required
+      // for visit.
       var_inf.time_dim=time_dim;
       continue;
     }
@@ -1537,6 +1610,7 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
     }
     bool found_dim_match=false;
 
+    // Match dimension to horizontal (cell) dimension of a mesh
     for (std::map<std::string,MeshInfo>::iterator it=mesh_table.begin();
          it!=mesh_table.end();
          ++it) {
@@ -1579,7 +1653,7 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
         continue;
       }
     }
-    debug5 << "  Failed to find any sort of match for dimension "<< dim_name <<endl;
+    debug1 << "  Failed to find any sort of match for dimension '"<< dim_name << "'" <<endl;
     return false;
   }
 
@@ -1611,7 +1685,7 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
     }
   }
 
-  debug1 << "End of setMeshInfo, and variable has mesh name " << var_inf.mesh_name << endl;
+  debug1 << "  setMeshInfo success. Variable has mesh name " << var_inf.mesh_name << endl;
   return true;
 }
 
@@ -1673,6 +1747,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
   std::string positive;
   std::string std_name;
 
+  // Iterate over all variables
   for(int var_num=0;var_num<nvars;var_num++) {
     debug5 << " Is variable " << var_num << " a vertical coordinate for dim " << dim << endl;
     if( nc_inq_varndims(ncid,var_num,&ndims) || 
@@ -1688,7 +1763,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
       }
     }
     if( d==ndims ) 
-      continue ; // no match
+      continue ; // this variable does not include the requested dimension
 
     std_name = get_att_as_string(ncid,var_num,"standard_name");
     if ( std_name == "altitude" ) {
@@ -1698,7 +1773,17 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
     } else {
       positive = get_att_as_string(ncid,var_num,"positive");
     }
-    
+
+    if( positive=="" ) {
+      // nonstandard, in some untrim output
+      positive = get_att_as_string(ncid,var_num,"_CoordinateZisPositive");
+    }
+
+    if( positive=="" && std_name == "ocean_zlevel_coordinate") {
+      debug1 << "Variable looks like layer variable based on standard name. Punting with positive='up'" << endl;
+      positive = "up";
+    }
+
     if ( positive == "" ) {
       debug5 << "  Variable does not have positive attribute" << endl;
       continue; // not a vertical coordiante
@@ -2182,6 +2267,8 @@ avtUGRIDFileFormat::avtUGRIDFileFormat(const char *filename)
   populate_filenames(filename);
   domain_count=filenames.size();
   
+  debug1 << "Back from populate_filenames, domain count is " << domain_count << endl;
+
   domain_cache.resize(domain_count,NULL);
   metadata_cache.resize(domain_count,NULL);
 }
@@ -2212,9 +2299,9 @@ bool avtUGRIDFileFormat::check_DFM_multi(std::string basename, std::vector<std::
   //   // schout_0000_1.nc
   //   // where the %04d is domain, and _1 is sequence.
   
-  char patt_proc[] = "<.*_([0-9][0-9][0-9][0-9])_.*\\.nc$> \0";
-  char patt_prefix[] = "<(.*_)[0-9][0-9][0-9][0-9]_.*\\.nc$> \0";
-  char patt_suffix[] = "<.*_[0-9][0-9][0-9][0-9](_.*\\.nc)$> \0";
+  char patt_proc[] = "<.*_([0-9][0-9][0-9][0-9])_.*\\.nc$> \\1";
+  char patt_prefix[] = "<(.*_)[0-9][0-9][0-9][0-9]_.*\\.nc$> \\1";
+  char patt_suffix[] = "<.*_[0-9][0-9][0-9][0-9](_.*\\.nc)$> \\1";
   
   debug1 << "About to check regex" << endl;
   
@@ -2224,20 +2311,22 @@ bool avtUGRIDFileFormat::check_DFM_multi(std::string basename, std::vector<std::
   //  ".*_([0-9][0-9][0-9][0-9])_.*\\.nc$",
   
   // Might be running afoul of the c_str return values.
-  char *basename_c_str = new char[basename.length() + 1];
-  std::strcpy(basename_c_str, basename.c_str());
+  //char *basename_c_str = new char[basename.length() + 1];
+  //std::strcpy(basename_c_str, basename.c_str());
   
-  std::string proc_str = StringHelpers::ExtractRESubstr(basename_c_str, patt_proc);
+  std::string proc_str = StringHelpers::ExtractRESubstr(basename.c_str(), patt_proc);
   if (proc_str == "") {
+	  debug1 << "basename: '" << basename << "'" << endl;
+	  debug1 << "pattern: '" << patt_proc << "'" << endl;
     debug1 << "About to skip DFM" << endl;
     return false;
   }
   
   debug1 << "Back from Regex, and it did not fail" << endl;
-  // Gets to here, but cannot print proc_str.
-  debug1 << "Back from Regex, proc_str is" << proc_str << endl;
+  debug1 << "Back from Regex, proc_str is " << proc_str << endl;
 
-  int proc_num = std::stoi(proc_str);
+  // Tried using std::stoi(proc_str) but it failed (segfault?)
+  int proc_num = atoi(proc_str.c_str());
 
   debug1 << "Proc num is " << proc_num << endl;
 
@@ -2250,27 +2339,32 @@ bool avtUGRIDFileFormat::check_DFM_multi(std::string basename, std::vector<std::
   
   debug1 << "Looks like proc 0: " << basename << endl;
   
-  // does ReplaceRE understand capture groups? no.
+  debug1 << "About to loop through candidate filenames" << endl;
+
   std::string prefix = StringHelpers::ExtractRESubstr(basename.c_str(), patt_prefix);
-  std::string suffix = StringHelpers::ExtractRESubstr(basename.c_str(), patt_suffix);
   if (prefix == "") {
-    debug1 << "Didn't find prefix. That's bad" << endl;
-    return true; // or assert false
+	  debug1 << "Didn't find prefix. That's bad" << endl;
+	  return true; // or assert false
   }
+  debug1 << "Will be looking for prefix '" << prefix << "'" << endl;
+
+  std::string suffix = StringHelpers::ExtractRESubstr(basename.c_str(), patt_suffix);
+  
   if (suffix == "") {
     debug1 << "Didn't find suffix. That's bad" << endl;
     return true; // or assert false
-  }
-  
-  debug1 << "About to loop through candidate filenames" << endl;
+  }  
+  debug1 << "                and suffix '" << suffix << "'" << endl;
+
   for (int proc = 1; proc < MAX_SUBDOMAINS; proc++) {
     int file_idx = 0;
     for (; file_idx < all_files.size(); file_idx++) {
       std::string basename_sub = FileFunctions::Basename(all_files[file_idx]);
+	  debug1 << "Checking " << basename_sub << endl;
       char buff[10];
       sprintf(buff, "%04d", proc);
       std::string basename_this_proc = prefix + std::string(buff) + suffix;
-      
+	  debug1 << "against " << basename_this_proc << endl;
       if (basename_sub != basename_this_proc)
         continue;
       

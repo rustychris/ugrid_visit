@@ -187,7 +187,6 @@ class avtUGRIDSingle : public avtMTSDFileFormat
   // DATA MEMBERS
 
   virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
-  virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *);
 
   // netcdf helpers:
   // read a full field of values at a given timestate
@@ -199,6 +198,9 @@ protected:
   int ncid; // handle for netcdf file
   int time_dim; // some variables/meshes may have a different time - that's not tested, tho.
   int time_var;
+
+  void set_time_info();
+
   // int node_x_var,node_y_var;
   std::string default_ugrid_mesh;
   std::map<std::string,VarInfo> var_table;
