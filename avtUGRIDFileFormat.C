@@ -71,11 +71,7 @@
 
 #include <vtkCellDataToPointData.h>
 
-#if defined(_WIN32)
- #include <win32-regex.h>
-#else
- #include <regex.h>
-#endif
+#include <StringHelpers.h>
 
 #include <string>
 
@@ -291,7 +287,7 @@ MeshInfo::GetMesh2D(int timestate)
   // read the node_face info, build up triangles/quads.
   debug1 << "GetMesh: ugrid mesh name " << name << endl;
 
-  nc_type xtype;
+  //UNUSED nc_type xtype;
   
   std::string face_node=get_att_as_string(ncid,varid,"face_node_connectivity");
 
@@ -1092,7 +1088,7 @@ avtUGRIDSingle::avtUGRIDSingle(const char *filename,int _domain)
   : avtMTSDFileFormat(&filename, 1)
 {
   // INITIALIZE DATA MEMBERS
-  int retval;
+  // UNUSED int retval;
   domain=_domain;
 
   if ( nc_open(filename, NC_NOWRITE, &ncid) ) {
@@ -1142,6 +1138,7 @@ avtUGRIDSingle::avtUGRIDSingle(const char *filename,int _domain)
   }
 
   initialize_metadata();
+  debug1 << "avtUGRIDSingle constructor end of function" << endl;
 }
 
 avtUGRIDSingle::~avtUGRIDSingle() {
@@ -1366,7 +1363,7 @@ void avtUGRIDSingle::initialize_metadata(void)
     var_table[name]=var_inf;
     debug1 << "initialize_metadata: added mesh domain var " << var_inf.name << endl;
   }
-
+  debug1 << "initialize_metadata: end of function" << endl;
   // TODO:
   // in the above loop, also add a proc-local cell index variable.
   // and for any 3D meshes, add a pseudo-variable for layer k
@@ -1396,6 +1393,8 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
   int topological_dimension = 2;
   double *extents = NULL;
 
+  debug1 << "PopulateDatabaseMetaData: top" << endl;
+
   for (std::map<std::string,VarInfo>::iterator it=var_table.begin();
        it!=var_table.end();
        ++it) {
@@ -1404,6 +1403,12 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
     smd->name=it->first;
 
     VarInfo &var_inf=it->second;
+
+    if (var_inf.var_id < 0)
+    {
+      debug1 << "Virtual variable -- skipping for sanity during debugging" << endl;
+      continue;
+    }
 
     std::string units=get_att_as_string(ncid,var_inf.var_id,"units");
     if (units != "" ) {
@@ -1423,8 +1428,13 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
       continue;
     }
 
+
+    debug1 << "PopulateDatabaseMetaData about to add scalar metadata" << endl;
+
     md->Add(smd);
   }
+
+  debug1 << "PopulateDatabaseMetaData: after adding scalar metadata" << endl;
 
   // We should have all of the meshes now - any 2D meshes defined
   // by a cf_role='mesh_topology' attribute, plus the 3D meshes
@@ -1448,6 +1458,8 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
 
   }
 
+  debug1 << "PopulateDatabaseMetaData: after adding meshes" << endl;
+
   // CODE TO ADD A VECTOR VARIABLE
   //
   // string mesh_for_this_var = meshname; // ??? -- could be multiple meshes
@@ -1467,6 +1479,8 @@ avtUGRIDSingle::PopulateDatabaseMetaData(avtDatabaseMetaData *md, int timeState)
   //   add a z_bed expression
   // similar expressions for vel magnitude, vector velocity
   initialize_expressions(md);
+
+  debug1 << "PopulateDatabaseMetaData: end" << endl;
 }
 
 void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
@@ -1504,7 +1518,7 @@ avtUGRIDSingle::setMeshInfo(VarInfo &var_inf)
 {
   int z_var=-1;
   char dim_name[NC_MAX_NAME];
-  MeshInfo &mesh=mesh_table[default_ugrid_mesh];
+  // MeshInfo &mesh=mesh_table[default_ugrid_mesh]; // Maybe not used??
 
   // presumably a 3D field (not yet dealing with structured grids!)
   for(int d=0;d<var_inf.ndims;d++){
@@ -1645,7 +1659,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
 {
   // scan variables, see if there is a corresponding vertical coordinate 
   // variable.
-  char var_scan[NC_MAX_NAME];
+  //UNUSED char var_scan[NC_MAX_NAME];
   int nvars;
 
   if ( nc_inq_nvars(ncid,&nvars) ) {
@@ -1653,7 +1667,7 @@ avtUGRIDSingle::vertical_coordinate_for_dimension(int dim)
     return -1;
   }
 
-  char dim_name[NC_MAX_NAME];
+  //UNUSED char dim_name[NC_MAX_NAME];
   int ndims;
   int dims[MAX_DIMS];
   std::string positive;
@@ -1750,8 +1764,8 @@ avtUGRIDSingle::GetMesh(int timestate, const char *meshname)
 {
   std::string requested(meshname);
   std::string ugrid_mesh;
-  int ndim;
-  int retval;
+  //int ndim;
+  // UNUSED int retval;
 
   // meh - I guess this goes here
   activateTimestate(timestate);
@@ -2181,6 +2195,153 @@ void save_file_name(void *data, const std::string &filename, bool a, bool b, lon
   debug1 << "Found file: " << filename << endl;
 }
 
+bool avtUGRIDFileFormat::check_DFM_multi(std::string basename, std::vector<std::string> &all_files)
+{
+  // match against a hopeful pattern of multidomain output
+  // within block throw false to proceed with next possible pattern
+  debug1 << "Checking for DFM partitioned output" << endl;
+  // need to match both
+  // This is a single output file, prefixed only by the name of the run.
+  // short_test_08_0000_map.nc
+  // and
+  // This is the name of the run, the proc, but then a timestamp
+  // wy2013c_0000_20120801_000000_map.nc
+  // The greediness is making that more difficult.
+
+  //   // MPI output from schism is not too different:
+  //   // schout_0000_1.nc
+  //   // where the %04d is domain, and _1 is sequence.
+  
+  char patt_proc[] = "<.*_([0-9][0-9][0-9][0-9])_.*\\.nc$> \0";
+  char patt_prefix[] = "<(.*_)[0-9][0-9][0-9][0-9]_.*\\.nc$> \0";
+  char patt_suffix[] = "<.*_[0-9][0-9][0-9][0-9](_.*\\.nc)$> \0";
+  
+  debug1 << "About to check regex" << endl;
+  
+  // Specific to DFM
+  //  ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$",
+  // Should work for DFM and SCHISM, but maybe be too lenient.
+  //  ".*_([0-9][0-9][0-9][0-9])_.*\\.nc$",
+  
+  // Might be running afoul of the c_str return values.
+  char *basename_c_str = new char[basename.length() + 1];
+  std::strcpy(basename_c_str, basename.c_str());
+  
+  std::string proc_str = StringHelpers::ExtractRESubstr(basename_c_str, patt_proc);
+  if (proc_str == "") {
+    debug1 << "About to skip DFM" << endl;
+    return false;
+  }
+  
+  debug1 << "Back from Regex, and it did not fail" << endl;
+  // Gets to here, but cannot print proc_str.
+  debug1 << "Back from Regex, proc_str is" << proc_str << endl;
+
+  int proc_num = std::stoi(proc_str);
+
+  debug1 << "Proc num is " << proc_num << endl;
+
+  // only look for subdomains if it looks like we were given domain 0.
+  if (proc_num != 0) {
+    debug1 << "proc num was not 0" << endl;
+    
+    return true; // it's dflow, but not the first subdomain
+  }
+  
+  debug1 << "Looks like proc 0: " << basename << endl;
+  
+  // does ReplaceRE understand capture groups? no.
+  std::string prefix = StringHelpers::ExtractRESubstr(basename.c_str(), patt_prefix);
+  std::string suffix = StringHelpers::ExtractRESubstr(basename.c_str(), patt_suffix);
+  if (prefix == "") {
+    debug1 << "Didn't find prefix. That's bad" << endl;
+    return true; // or assert false
+  }
+  if (suffix == "") {
+    debug1 << "Didn't find suffix. That's bad" << endl;
+    return true; // or assert false
+  }
+  
+  debug1 << "About to loop through candidate filenames" << endl;
+  for (int proc = 1; proc < MAX_SUBDOMAINS; proc++) {
+    int file_idx = 0;
+    for (; file_idx < all_files.size(); file_idx++) {
+      std::string basename_sub = FileFunctions::Basename(all_files[file_idx]);
+      char buff[10];
+      sprintf(buff, "%04d", proc);
+      std::string basename_this_proc = prefix + std::string(buff) + suffix;
+      
+      if (basename_sub != basename_this_proc)
+        continue;
+      
+      debug1 << "Yep! " << basename_sub << endl;
+      filenames.push_back(all_files[file_idx]);
+      break;
+    }
+    if (file_idx == all_files.size()) {
+      return true; // all done.
+    }
+  }
+  return true;
+}
+
+bool avtUGRIDFileFormat::check_SUNTANS_multi(std::string basename, std::vector<std::string> &all_files)
+{
+  // SUNTANS partitioned output
+  // files like: Estuary_SUNTANS.nc.nc.0
+  std::string patt_proc = "<.*_SUNTANS\\.nc\\.nc\\.([0-9]+)$> \0";
+  std::string patt_prefix = "<(.*_SUNTANS\\.nc\\.nc\\.)[0-9]+$> \0";
+  
+  // does the basename match?
+  std::string proc_str = StringHelpers::ExtractRESubstr(basename.c_str(), patt_proc.c_str());
+  if (proc_str == "") {
+    return false;
+  }
+  
+  debug1 << "Matched " << proc_str << endl;
+  
+  int proc_num = std::stoi(proc_str);
+  
+  // only look for subdomains if it looks like we were given domain 0.
+  if (proc_num != 0) {
+    return true; // it's suntans but not the first subdomain
+  }
+  
+  debug1 << "Looks like suntans proc 0: " << basename << endl;
+  
+  debug1 << "About to loop through suntans candidate filenames" << endl;
+  
+  std::string prefix = StringHelpers::ExtractRESubstr(basename.c_str(), patt_prefix.c_str());
+  if (prefix == "")
+    {
+      debug1 << "ERROR: Failed to find prefix after finding proc" << endl;
+      return true;
+    }
+  
+  for (int proc = 1; proc < MAX_SUBDOMAINS; proc++) {
+    debug1 << "Checking for suntans proc " << proc << endl;
+    int file_idx = 0;
+    for (; file_idx < all_files.size(); file_idx++) {
+      std::string basename_sub = FileFunctions::Basename(all_files[file_idx]);
+      char buff[10];
+      sprintf(buff, "%d", proc);
+      std::string basename_proc = prefix + std::string(buff);
+      debug5 << "Try suntans for " << basename_sub << endl;
+      
+      if (basename != basename_proc)
+        continue;
+      
+      debug1 << "Yep! " << basename_sub << endl;
+      filenames.push_back(all_files[file_idx]);
+      break;
+    }
+    if (file_idx == all_files.size()) {
+      return true; // all done.
+    }
+  }
+  return true;
+}
+
 // Based on the path provided by the GUI, look for similar
 // filenames to make up a multi-processor run. Sets
 // filenames[i].
@@ -2204,158 +2365,12 @@ avtUGRIDFileFormat::populate_filenames(const char *filename)
   // my_path has the directory, without trailing /
   // base has our basename.
 
-  // match against a hopeful pattern of multidomain output
-  regex_t cre;
-  regmatch_t pm[2];
-  regmatch_t pm_sub[2]; // for matching to other subdomains
+  if (check_DFM_multi(basename, all_files))
+	  return;
 
-  // within block throw false to proceed with next possible pattern
-  try { // DFLOWFM partitioned output
-    // need to match both
-    // This is a single output file, prefixed only by the name of the run.
-    // short_test_08_0000_map.nc
-    // and
-    // This is the name of the run, the proc, but then a timestamp
-    // wy2013c_0000_20120801_000000_map.nc
-    // The greediness is making that more difficult.
+  if (check_SUNTANS_multi(basename, all_files))
+	  return;
 
-    // MPI output from schism is not too different:
-    // schout_0000_1.nc
-    // where the %04d is domain, and _1 is sequence.
-    if ( regcomp(&cre,
-                 // Specific to DFM
-                 // ".*_([0-9][0-9][0-9][0-9])_(.*_)?map\\.nc$",
-                 // Should work for DFM and SCHISM, but maybe be too lenient.
-                 ".*_([0-9][0-9][0-9][0-9])_.*\\.nc$",
-                 REG_EXTENDED)) {
-      debug1 << "Couldn't compile pattern for finding raw data files" << endl;
-      throw false;
-    } else {
-      debug1 << "Compiled the regex" << endl;
-    }
-
-    // does the basename match?
-    if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 ) {
-      regfree(&cre);
-      throw false;
-    }
-
-    debug1 << "Matched, pm[1] " << pm[1].rm_so << " to " << pm[1].rm_eo << endl;
-
-    std::string proc_str=std::string(basename.c_str()+pm[1].rm_so,
-                                     pm[1].rm_eo - pm[1].rm_so);
-    int proc_num=atoi(proc_str.c_str());
-
-    // only look for subdomains if it looks like we were given domain 0.
-    if( proc_num!=0 ) {
-      regfree(&cre);
-      return; // it's dflow, but not the first subdomain
-    }
-
-    debug1 << "Looks like proc 0: " << basename << endl;
-
-    debug1 << "About to loop through candidate filenames" << endl;
-    for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
-      int file_idx=0;
-      for(;file_idx<all_files.size();file_idx++) {
-        std::string basename_sub=FileFunctions::Basename(all_files[file_idx]);
-
-        if ( regexec(&cre, basename_sub.c_str(), 2, pm_sub, 0) != 0 )
-          continue;
-
-        // only okay if the everything except the domain is the same.
-        if( basename.substr(0,pm[1].rm_so) !=
-            basename_sub.substr(0,pm_sub[1].rm_so) )
-          continue;
-        if( basename.substr(pm[1].rm_eo,std::string::npos) !=
-            basename_sub.substr(pm_sub[1].rm_eo,std::string::npos) )
-          continue;
-
-        debug5 << "Maybe " << basename_sub << endl;
-
-        std::string proc_str=std::string(basename_sub.c_str()+pm[1].rm_so,
-                                         pm[1].rm_eo - pm[1].rm_so);
-        int proc_num=atoi(basename_sub.substr(pm_sub[1].rm_so,
-                                              pm_sub[1].rm_eo).c_str());
-        if( proc_num!= proc )
-          continue;
-
-        debug1 << "Yep! " << basename_sub << endl;
-        filenames.push_back(all_files[file_idx]);
-        break;
-      }
-      if( file_idx==all_files.size() ) {
-        regfree(&cre);
-        return; // all done.
-      }
-    }
-  } catch (bool status) {}
-
-
-  try { // SUNTANS partitioned output
-    // files like: Estuary_SUNTANS.nc.nc.0
-    if ( regcomp(&cre, ".*_SUNTANS\\.nc\\.nc\\.([0-9]+)$", REG_EXTENDED)) {
-      debug1 << "Couldn't compile pattern for finding suntans data files" << endl;
-      throw false;
-    } else {
-      debug1 << "Compiled the suntans regex" << endl;
-    }
-
-    // does the basename match?
-    if ( regexec(&cre, basename.c_str(), 2, pm, 0) != 0 ) {
-      regfree(&cre);
-      throw false;
-    }
-
-    debug1 << "Matched, pm[1] " << pm[1].rm_so << " to " << pm[1].rm_eo << endl;
-
-    std::string proc_str=std::string(basename.c_str()+pm[1].rm_so,
-                                     pm[1].rm_eo - pm[1].rm_so);
-    int proc_num=atoi(proc_str.c_str());
-
-    // only look for subdomains if it looks like we were given domain 0.
-    if( proc_num!=0 ) {
-      regfree(&cre);
-      return; // it's dflow, but not the first subdomain
-    }
-
-    debug1 << "Looks like suntans proc 0: " << basename << endl;
-
-    debug1 << "About to loop through suntans candidate filenames" << endl;
-    for(int proc=1;proc<MAX_SUBDOMAINS;proc++) {
-      debug1 << "Checking for suntans proc " << proc << endl;
-      int file_idx=0;
-      for(;file_idx<all_files.size();file_idx++) {
-        std::string basename_sub=FileFunctions::Basename(all_files[file_idx]);
-        debug5 << "Try suntans for " << basename_sub << endl;
-
-        if ( regexec(&cre, basename_sub.c_str(), 2, pm_sub, 0) != 0 )
-          continue;
-
-        // only okay if the everything except the domain is the same.
-        if( basename.substr(0,pm[1].rm_so) !=
-            basename_sub.substr(0,pm_sub[1].rm_so) )
-          continue;
-
-        debug5 << "Maybe " << basename_sub << endl;
-
-        std::string proc_str=std::string(basename_sub.c_str()+pm[1].rm_so,
-                                         pm[1].rm_eo - pm[1].rm_so);
-        int proc_num=atoi(basename_sub.substr(pm_sub[1].rm_so,
-                                              pm_sub[1].rm_eo).c_str());
-        if( proc_num!= proc )
-          continue;
-
-        debug1 << "Yep! " << basename_sub << endl;
-        filenames.push_back(all_files[file_idx]);
-        break;
-      }
-      if( file_idx==all_files.size() ) {
-        regfree(&cre);
-        return; // all done.
-      }
-    }
-  } catch(bool status) { }
 }
 
 // How to handle avtDatabaseMetaData for top-level vs. 
@@ -2374,8 +2389,13 @@ avtUGRIDSingle *avtUGRIDFileFormat::subdomain(int domain) {
     domain_cache[domain] = new avtUGRIDSingle(filenames[domain].c_str(),domain);
     // this will initialize some internal state, too.
     metadata_cache[domain] = new avtDatabaseMetaData();
+
+    debug1 << "Constructed avtDatabaseMetaData()" << endl;
+
     // punt with timestate=0
     domain_cache[domain]->PopulateDatabaseMetaData(metadata_cache[domain],0);
+
+    debug1 << "PopulateDatabaseMetaData returned" << endl;
   }
   return domain_cache[domain];
 }

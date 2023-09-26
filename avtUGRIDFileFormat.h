@@ -187,6 +187,7 @@ class avtUGRIDSingle : public avtMTSDFileFormat
   // DATA MEMBERS
 
   virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *, int);
+  virtual void PopulateDatabaseMetaData(avtDatabaseMetaData *);
 
   // netcdf helpers:
   // read a full field of values at a given timestate
@@ -263,6 +264,8 @@ protected:
 
   avtUGRIDSingle *subdomain(int domain);
   void populate_filenames(const char *);
+  bool check_DFM_multi(std::string basename, std::vector<std::string> &all_files);
+  bool check_SUNTANS_multi(std::string basename, std::vector<std::string> &all_files);
 
   // I think this can be handled within the subdomains.
   // void activateTimestate(int);
