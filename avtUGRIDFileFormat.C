@@ -266,7 +266,7 @@ MeshInfo::GetMesh(int timestate)
     // without GetMesh2D calling mesh->Register(), this
     // crashes.  But that was because it was being Deleted
     // in multiple places.
-    surface->Delete(); // is this okay? seems to make it crash.
+    surface->Delete(); // Pretty sure this is okay. 
     return full;
   }
 }
@@ -686,6 +686,18 @@ MeshInfo::set_layer_bounds(std::string z_std_name,
     }
   }
 
+  // Special untrim handling. Only interfaces are stored, and
+  // the last value is missing. There is probably an official
+  // way of comparing against fill values, but it is showing up
+  // as 5e36 or so.
+  if ( fabs(layer_centers[n_layers-1]) > 1e30 ) {
+    debug1 << "Layer variable appears to be untrim. Interpet as interfaces" << endl;
+    set_bounds_from_interfaces(layer_centers,layer_bottom,layer_top);
+    delete[] layer_centers;
+    return;
+  }
+
+  
   // Special DFlowFM workaround - layer coordinates are
   // incorrect after first output, at least in r50237
   if( fabs(layer_centers[0]) > 100000 ) {
@@ -745,6 +757,47 @@ MeshInfo::set_layer_bounds(std::string z_std_name,
     }
   }
   delete[] layer_centers;
+}
+
+void
+MeshInfo::set_bounds_from_interfaces(float *interfaces,
+                                     std::vector<float> &layer_bottom,
+                                     std::vector<float> &layer_top)
+{
+  // Assumes interfaces has length same as layer_bottom and layer_top, but
+  // last element is not valid.
+  int n_layers=layer_bottom.size();
+  
+  for(int k=0;k<n_layers;k++) {
+    if (k>0)
+      layer_bottom[k] = interfaces[k-1];
+    if(k<n_layers-1)
+      layer_top[k] = interfaces[k];
+  }
+
+  // And fabricate numbers for top and bottom.
+  if(n_layers==1) {
+    // No information at all...
+    layer_bottom[0]=0;
+    layer_top[0]=1.0;
+  }
+  else if(n_layers==2) {
+    // no thickness information, but we have an offset
+    layer_bottom[0] = layer_top[0] - 1.0;
+    layer_top[1] = layer_bottom[1] + 1.0;
+  }
+  else {
+    double dz = layer_top[1] - layer_bottom[1];
+    layer_bottom[0] = layer_top[0] - dz;
+    dz=layer_top[n_layers-2] - layer_bottom[n_layers-2];
+    layer_top[n_layers-1] = layer_bottom[n_layers-1] + dz;
+  }
+
+  for(int k=0;k<n_layers;k++) {
+    debug1 << "k = " << k << " of " << n_layers << ": bottom=" << layer_bottom[k]
+           << "  top=" << layer_top[k]
+           << endl;
+  }
 }
 
 
@@ -1546,6 +1599,7 @@ void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
     md->AddExpression(e0);
   }
 
+  // suntans velocities
   if (var_table.count("uc") > 0)
   {
     Expression *e1 = new Expression;
@@ -1563,6 +1617,23 @@ void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
     md->AddExpression(e2);
   }
 
+  // untrim velocities
+  if( var_table.count("Mesh2_cell_east_velocity_depth_aver")>0 ) {
+    Expression *e1 = new Expression;
+    e1->SetName("vel_2d");
+    e1->SetDefinition("{Mesh2_cell_east_velocity_depth_aver,Mesh2_cell_north_velocity_depth_aver}");
+    e1->SetType(Expression::VectorMeshVar);
+    e1->SetHidden(false);
+    md->AddExpression(e1);
+    
+    Expression *e2 = new Expression;
+    e2->SetName("speed_2d");
+    e2->SetDefinition("sqrt(Mesh2_cell_east_velocity_depth_aver^2 + Mesh2_cell_north_velocity_depth_aver^2)");
+    e2->SetType(Expression::ScalarMeshVar);
+    e2->SetHidden(false);
+    md->AddExpression(e2);    
+  }
+
   // For any positive:down variable, make a copy with positive:up
   std::map<std::string, VarInfo>::iterator it;
   for(it = var_table.begin() ; it != var_table.end() ; it++)
@@ -1578,8 +1649,11 @@ void avtUGRIDSingle::initialize_expressions(avtDatabaseMetaData *md) {
       flip->SetType(Expression::ScalarMeshVar);
       flip->SetHidden(false);
       md->AddExpression(flip);
+      continue;
     }
+
   }
+
 }
 
 // With spatial_dim_names populated and sorted, figure out which 
@@ -1697,7 +1771,7 @@ avtUGRIDSingle::create_3d_mesh(std::string mesh2d,int z_dim,int z_var) {
 
   std::string result=mesh2d+"."+std::string(z_var_name);
 
-  debug1 << "Combining 2D mesh " << mesh2d << " with vertical coordinate " << z_var_name << endl;
+  debug1 << "  Combining 2D mesh " << mesh2d << " with vertical coordinate " << z_var_name << endl;
   debug1 << "  Result is " << result << endl;
 
   // Used to create lots of these -- maybe better to replace only when

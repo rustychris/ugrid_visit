@@ -108,6 +108,10 @@ public:
   bool set_bounds_from_dfm_flowelem_zw(std::vector<float> &layer_bottom,
                                        std::vector<float> &layer_top);
 
+  void set_bounds_from_interfaces(float*,
+    std::vector<float> &layer_bottom,
+    std::vector<float> &layer_top);
+  
   void activateTimestate(int);
 
   vtkDataArray *ZoneToNode2D(vtkDataArray *,vtkUnstructuredGrid *);
